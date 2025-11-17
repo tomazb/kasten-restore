@@ -14,7 +14,6 @@ source "${SCRIPT_DIR}/k10-vm-common.sh"
 VM_NAME=""
 NAMESPACE=""
 LABEL_SELECTOR=""
-ALL_VMS=false
 SHOW_DISKS=true
 VM_ONLY=true
 DELETED_ONLY=false
@@ -72,7 +71,7 @@ parse_args() {
         shift 2
         ;;
       --all)
-        ALL_VMS=true
+        # All VMs flag - filters are empty so all will be shown
         shift
         ;;
       --show-disks)
@@ -104,19 +103,19 @@ parse_args() {
 
 # Get all restore point contents
 get_restore_point_contents() {
-  local filter=""
+  local filter_args=()
 
   if [[ -n "$VM_NAME" && -n "$NAMESPACE" ]]; then
-    filter="-l k10.kasten.io/appName=${VM_NAME},k10.kasten.io/appNamespace=${NAMESPACE}"
+    filter_args=(-l "k10.kasten.io/appName=${VM_NAME},k10.kasten.io/appNamespace=${NAMESPACE}")
   elif [[ -n "$NAMESPACE" ]]; then
-    filter="-n ${NAMESPACE}"
+    filter_args=(-n "${NAMESPACE}")
   elif [[ -n "$LABEL_SELECTOR" ]]; then
-    filter="-l ${LABEL_SELECTOR}"
+    filter_args=(-l "${LABEL_SELECTOR}")
   else
-    filter="-A"
+    filter_args=(-A)
   fi
 
-  kubectl get restorepointcontents.apps.kio.kasten.io ${filter} -o json 2>/dev/null || echo '{"items":[]}'
+  kubectl get restorepointcontents.apps.kio.kasten.io "${filter_args[@]}" -o json 2>/dev/null || echo '{"items":[]}'
 }
 
 # Check if restore point is for a VM

@@ -356,7 +356,7 @@ create_restore_action() {
 
   log_info "Creating RestoreAction: ${RESTORE_ACTION_NAME}"
 
-  cat <<EOF | kubectl apply -f -
+  if cat <<EOF | kubectl apply -f -
 apiVersion: actions.kio.kasten.io/v1alpha1
 kind: RestoreAction
 metadata:
@@ -377,8 +377,7 @@ spec:
     - name: ${transform_name}
       namespace: ${k10_namespace}
 EOF
-
-  if [[ $? -eq 0 ]]; then
+  then
     log_success "RestoreAction created: ${RESTORE_ACTION_NAME}"
     return 0
   else
@@ -554,8 +553,7 @@ execute_restore() {
     transform_file="$TRANSFORM_FILE"
     log_info "Using custom transform file: ${transform_file}"
   else
-    transform_file=$(create_restore_transforms)
-    if [[ $? -ne 0 ]]; then
+    if ! transform_file=$(create_restore_transforms); then
       return 1
     fi
   fi

@@ -39,11 +39,13 @@ spec:
     # PVC transforms
     pvc:
       - op: add
-        path: /metadata/annotations/cdi.kubevirt.io~1storage.condition.bound
+        path: >-
+          /metadata/annotations/cdi.kubevirt.io~1storage.condition.bound
         value: "true"
         description: "Mark PVC as bound"
       - op: add
-        path: /metadata/annotations/cdi.kubevirt.io~1storage.condition.bound.reason
+        path: >-
+          /metadata/annotations/cdi.kubevirt.io~1storage.condition.bound.reason
         value: "Bound"
         description: "Add bound reason annotation"
 
@@ -88,8 +90,10 @@ spec:
   # Error handling
   errorHandling:
     continueOnWarning: true
-    cleanupOnFailure: false    # Don't auto-cleanup on failure (allow manual inspection)
-    notifyOnFailure: false     # Notification integration (future)
+    # Don't auto-cleanup on failure (allow manual inspection)
+    cleanupOnFailure: false
+    # Notification integration (future)
+    notifyOnFailure: false
 
 ---
 # Example: Production to Test Restore Profile

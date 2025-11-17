@@ -196,7 +196,7 @@ check_snapshot_class() {
     # Check for any VolumeSnapshotClass with K10 annotation
     if kubectl get volumesnapshotclass \
       -l "k10.kasten.io/is-snapshot-class=true" \
-      -o name &>/dev/null | grep -q .; then
+      -o name 2>/dev/null | grep -q .; then
       log_success "VolumeSnapshotClass with K10 annotation found"
       return 0
     else
@@ -364,7 +364,8 @@ sanitize_k8s_name() {
 # Parse size string (e.g., "30Gi" -> 30)
 parse_size() {
   local size=$1
-  echo "$size" | sed 's/[^0-9]//g'
+  # Remove all non-numeric characters
+  echo "${size//[^0-9]/}"
 }
 
 # Wait for resource with timeout
