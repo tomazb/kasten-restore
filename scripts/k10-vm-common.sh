@@ -34,7 +34,7 @@ log_error() {
 is_virtual_machine() {
   local app_name=$1
   local namespace=$2
-  kubectl get vm "${app_name}" -n "${namespace}" &>/dev/null
+  kubectl get vm "${app_name}" -n "${namespace}" &>/dev/null || return $?
 }
 
 # Get VM disk information
@@ -217,8 +217,6 @@ check_snapshot_class() {
 # Validate namespace resource quotas
 validate_namespace_capacity() {
   local namespace=$1
-  local required_cpu=${2:-"1"}
-  local required_memory=${3:-"2Gi"}
 
   log_info "Checking namespace ${namespace} resource quotas..."
 
