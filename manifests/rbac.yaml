@@ -1,0 +1,205 @@
+---
+# RBAC Configuration for Kasten K10 VM Restore Utility Scripts
+# This manifest creates the necessary permissions for VM restore operations
+
+# ClusterRole for K10 VM Restore Utilities
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k10-vm-restore-utils
+  labels:
+    app: k10-vm-restore-utils
+    k10-vm-utils.io/component: rbac
+rules:
+  # K10 APIs - Read access to restore points and applications
+  - apiGroups: ["apps.kio.kasten.io"]
+    resources:
+      - restorepoints
+      - restorepointcontents
+      - applications
+    verbs: ["get", "list", "watch"]
+
+  # K10 APIs - Create and manage restore actions
+  - apiGroups: ["actions.kio.kasten.io"]
+    resources:
+      - restoreactions
+    verbs: ["create", "get", "list", "watch", "update", "patch"]
+
+  # K10 APIs - Manage transforms
+  - apiGroups: ["config.kio.kasten.io"]
+    resources:
+      - transformsets
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+
+  # VirtualMachine resources - Full access
+  - apiGroups: ["kubevirt.io"]
+    resources:
+      - virtualmachines
+      - virtualmachineinstances
+      - virtualmachineinstancereplicasets
+      - virtualmachineinstancepresets
+    verbs: ["get", "list", "create", "update", "patch", "watch"]
+
+  # CDI (Containerized Data Importer) resources
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources:
+      - datavolumes
+      - datasources
+      - dataimportcrons
+    verbs: ["get", "list", "create", "update", "patch", "watch"]
+
+  # Storage - PVCs
+  - apiGroups: [""]
+    resources:
+      - persistentvolumeclaims
+    verbs: ["get", "list", "create", "update", "patch", "watch"]
+
+  # Storage - Volume Snapshots
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources:
+      - volumesnapshots
+      - volumesnapshotclasses
+      - volumesnapshotcontents
+    verbs: ["get", "list", "watch"]
+
+  # Storage Classes
+  - apiGroups: ["storage.k8s.io"]
+    resources:
+      - storageclasses
+    verbs: ["get", "list", "watch"]
+
+  # Namespaces - Read and create
+  - apiGroups: [""]
+    resources:
+      - namespaces
+    verbs: ["get", "list", "create", "watch", "update", "patch"]
+
+  # ConfigMaps and Secrets - For cloud-init and VM configuration
+  - apiGroups: [""]
+    resources:
+      - configmaps
+      - secrets
+    verbs: ["get", "list", "create", "watch"]
+
+  # Resource Quotas - Read access for validation
+  - apiGroups: [""]
+    resources:
+      - resourcequotas
+    verbs: ["get", "list", "watch"]
+
+  # Events - Read access for troubleshooting
+  - apiGroups: [""]
+    resources:
+      - events
+    verbs: ["get", "list", "watch"]
+
+  # CRDs - Read access to check for KubeVirt/CDI installation
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources:
+      - customresourcedefinitions
+    verbs: ["get", "list", "watch"]
+
+---
+# ServiceAccount for VM Restore Operations
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k10-vm-restore-sa
+  namespace: kasten-io
+  labels:
+    app: k10-vm-restore-utils
+    k10-vm-utils.io/component: serviceaccount
+
+---
+# ClusterRoleBinding to bind the ClusterRole to the ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k10-vm-restore-utils-binding
+  labels:
+    app: k10-vm-restore-utils
+    k10-vm-utils.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k10-vm-restore-utils
+subjects:
+  - kind: ServiceAccount
+    name: k10-vm-restore-sa
+    namespace: kasten-io
+
+---
+# Optional: Role for namespace-scoped operations
+# Use this if you want to restrict VM restore operations to specific namespaces
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k10-vm-restore-ns-role
+  namespace: vms-prod  # Change to your target namespace
+  labels:
+    app: k10-vm-restore-utils
+    k10-vm-utils.io/component: rbac
+rules:
+  # VirtualMachine resources
+  - apiGroups: ["kubevirt.io"]
+    resources:
+      - virtualmachines
+      - virtualmachineinstances
+    verbs: ["get", "list", "create", "update", "patch", "watch"]
+
+  # CDI resources
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources:
+      - datavolumes
+    verbs: ["get", "list", "create", "update", "patch", "watch"]
+
+  # Storage
+  - apiGroups: [""]
+    resources:
+      - persistentvolumeclaims
+    verbs: ["get", "list", "create", "update", "patch", "watch"]
+
+  # ConfigMaps and Secrets
+  - apiGroups: [""]
+    resources:
+      - configmaps
+      - secrets
+    verbs: ["get", "list", "create", "watch"]
+
+  # Restore Actions
+  - apiGroups: ["actions.kio.kasten.io"]
+    resources:
+      - restoreactions
+    verbs: ["create", "get", "list", "watch", "update", "patch"]
+
+---
+# Optional: RoleBinding for namespace-scoped operations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k10-vm-restore-ns-binding
+  namespace: vms-prod  # Change to your target namespace
+  labels:
+    app: k10-vm-restore-utils
+    k10-vm-utils.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: k10-vm-restore-ns-role
+subjects:
+  - kind: ServiceAccount
+    name: k10-vm-restore-sa
+    namespace: kasten-io
+
+---
+# Security Note:
+# The above RBAC configuration provides the minimum required permissions
+# for VM restore operations. Review and adjust according to your security
+# policies and organizational requirements.
+#
+# For production environments:
+# 1. Consider using namespace-scoped Roles instead of ClusterRole
+# 2. Implement Pod Security Standards/Policies
+# 3. Use separate ServiceAccounts for different teams/environments
+# 4. Regularly audit and review permissions
+# 5. Consider using OPA/Gatekeeper for additional policy enforcement

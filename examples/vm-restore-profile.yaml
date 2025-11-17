@@ -1,0 +1,197 @@
+---
+# Example VMRestoreProfile Configuration
+# This is a reference configuration for VM restore operations
+# Customize according to your environment and requirements
+
+apiVersion: k10-utils.io/v1alpha1
+kind: VMRestoreProfile
+metadata:
+  name: vm-restore-defaults
+  namespace: kasten-io
+  labels:
+    k10-vm-utils.io/profile-type: "default"
+  annotations:
+    description: "Default VM restore profile for production environment"
+spec:
+  # Default behavior settings
+  autoStart: true          # Automatically start VM after restore
+  preserveMAC: true        # Preserve MAC addresses (K10 8.0+ feature)
+  preferSnapshot: true     # Prefer CSI snapshots over exports when available
+
+  # Storage class mappings
+  # Map source storage classes to target storage classes
+  storageClassMap:
+    source: ocs-storagecluster-ceph-rbd-prod
+    target: ocs-storagecluster-ceph-rbd-test
+
+  # Default transform templates for VM resources
+  transforms:
+    # DataVolume transforms
+    dataVolume:
+      - op: remove
+        path: /spec/source
+        description: "Disable CDI import/clone operations"
+      - op: add
+        path: /metadata/annotations/cdi.kubevirt.io~1storage.populatedFor
+        value: "{{.spec.pvc.name}}"
+        description: "Mark PVC as already populated"
+
+    # PVC transforms
+    pvc:
+      - op: add
+        path: /metadata/annotations/cdi.kubevirt.io~1storage.condition.bound
+        value: "true"
+        description: "Mark PVC as bound"
+      - op: add
+        path: /metadata/annotations/cdi.kubevirt.io~1storage.condition.bound.reason
+        value: "Bound"
+        description: "Add bound reason annotation"
+
+    # VirtualMachine transforms
+    vm:
+      - op: replace
+        path: /spec/dataVolumeTemplates
+        value: []
+        description: "Clear dataVolumeTemplates to use existing DataVolumes"
+
+  # Validation settings
+  validation:
+    waitForVMReady: true       # Wait for VM to be ready after restore
+    timeout: 600               # Timeout in seconds (10 minutes)
+    checkGuestAgent: false     # Check for guest agent availability
+    validateDiskSpace: true    # Validate sufficient disk space
+
+  # Target namespace settings
+  targetNamespace:
+    create: true               # Create namespace if it doesn't exist
+    copyLabels: true           # Copy labels from source namespace
+    copyAnnotations: false     # Don't copy annotations by default
+
+    # Resource quotas for created namespaces
+    quotas:
+      requests.cpu: "4"
+      requests.memory: "8Gi"
+      requests.storage: "100Gi"
+      persistentvolumeclaims: "10"
+
+    # Default labels for created namespaces
+    labels:
+      environment: "test"
+      managed-by: "k10-vm-restore-utils"
+
+  # Retry and timeout settings
+  retry:
+    maxAttempts: 3
+    backoffSeconds: 30
+    timeout: 1800              # Overall timeout: 30 minutes
+
+  # Error handling
+  errorHandling:
+    continueOnWarning: true
+    cleanupOnFailure: false    # Don't auto-cleanup on failure (allow manual inspection)
+    notifyOnFailure: false     # Notification integration (future)
+
+---
+# Example: Production to Test Restore Profile
+apiVersion: k10-utils.io/v1alpha1
+kind: VMRestoreProfile
+metadata:
+  name: prod-to-test-restore
+  namespace: kasten-io
+  labels:
+    k10-vm-utils.io/profile-type: "prod-to-test"
+spec:
+  autoStart: false             # Don't auto-start in test environment
+  preserveMAC: false           # Generate new MAC addresses for test VMs
+  preferSnapshot: true
+
+  storageClassMap:
+    source: ocs-storagecluster-ceph-rbd-prod
+    target: ocs-storagecluster-ceph-rbd-dev
+
+  targetNamespace:
+    create: true
+    copyLabels: true
+    labels:
+      environment: "test"
+      cloned-from: "production"
+
+    quotas:
+      requests.cpu: "2"
+      requests.memory: "4Gi"
+
+  validation:
+    waitForVMReady: false
+    timeout: 300
+
+---
+# Example: Disaster Recovery Restore Profile
+apiVersion: k10-utils.io/v1alpha1
+kind: VMRestoreProfile
+metadata:
+  name: dr-restore
+  namespace: kasten-io
+  labels:
+    k10-vm-utils.io/profile-type: "disaster-recovery"
+spec:
+  autoStart: true              # Auto-start VMs for DR scenario
+  preserveMAC: true            # Preserve MAC addresses in DR
+  preferSnapshot: true
+
+  storageClassMap:
+    source: ocs-storagecluster-ceph-rbd-prod
+    target: ocs-storagecluster-ceph-rbd-dr
+
+  targetNamespace:
+    create: true
+    copyLabels: true
+    copyAnnotations: true
+    labels:
+      environment: "dr"
+      disaster-recovery: "true"
+
+  validation:
+    waitForVMReady: true
+    timeout: 900               # 15 minutes for DR scenarios
+    checkGuestAgent: true
+
+  retry:
+    maxAttempts: 5             # More retries for DR
+    backoffSeconds: 60
+    timeout: 3600              # 1 hour timeout for DR
+
+---
+# Example: Development Restore Profile
+apiVersion: k10-utils.io/v1alpha1
+kind: VMRestoreProfile
+metadata:
+  name: dev-restore
+  namespace: kasten-io
+  labels:
+    k10-vm-utils.io/profile-type: "development"
+spec:
+  autoStart: false
+  preserveMAC: false           # Always generate new MACs in dev
+  preferSnapshot: true
+
+  storageClassMap:
+    source: ocs-storagecluster-ceph-rbd-prod
+    target: ocs-storagecluster-ceph-rbd-dev
+
+  targetNamespace:
+    create: true
+    labels:
+      environment: "development"
+
+    quotas:
+      requests.cpu: "1"
+      requests.memory: "2Gi"
+
+  validation:
+    waitForVMReady: false
+    timeout: 180
+    checkGuestAgent: false
+
+  retry:
+    maxAttempts: 1             # Minimal retries for dev
+    timeout: 600
