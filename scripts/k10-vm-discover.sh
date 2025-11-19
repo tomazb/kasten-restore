@@ -107,6 +107,9 @@ get_restore_point_contents() {
 
   if [[ -n "$VM_NAME" && -n "$NAMESPACE" ]]; then
     filter_args=(-l "k10.kasten.io/appName=${VM_NAME},k10.kasten.io/appNamespace=${NAMESPACE}")
+  elif [[ -n "$VM_NAME" ]]; then
+    # Filter by VM name across all namespaces
+    filter_args=(-A -l "k10.kasten.io/appName=${VM_NAME}")
   elif [[ -n "$NAMESPACE" ]]; then
     filter_args=(-n "${NAMESPACE}")
   elif [[ -n "$LABEL_SELECTOR" ]]; then
@@ -151,14 +154,16 @@ is_vm_restore_point() {
 get_disk_info() {
   local rpc_json=$1
 
-  echo "$rpc_json" | jq -r '
-    .status.restorePointContentDetails.artifacts[]? |
-    select(.resource.group == "cdi.kubevirt.io" and .resource.resource == "datavolumes") |
-    {
-      name: .resource.name,
-      size: (.artifact.metadata.spec.pvc.resources.requests.storage // "Unknown"),
-      type: (if .artifact.volumeSnapshot then "CSI Snapshot" else "Export" end)
-    }
+  echo "$rpc_json" | jq -c '
+    [
+      .status.restorePointContentDetails.artifacts[]? |
+      select(.resource.group == "cdi.kubevirt.io" and .resource.resource == "datavolumes") |
+      {
+        name: .resource.name,
+        size: (.artifact.spec.pvc.resources.requests.storage // "Unknown"),
+        type: (if .artifact.volumeSnapshot then "CSI Snapshot" else "Export" end)
+      }
+    ]
   ' 2>/dev/null || echo '[]'
 }
 
@@ -240,21 +245,12 @@ check_freeze_annotation_rpc() {
 get_restore_methods() {
   local rpc_json=$1
 
-  local has_snapshot has_export
-  has_snapshot=$(echo "$rpc_json" | jq -r '
-    .status.restorePointContentDetails.artifacts[]? |
-    select(.volumeSnapshot != null) | .resource.name
-  ' | head -1)
-
-  has_export=$(echo "$rpc_json" | jq -r '
-    .status.restorePointContentDetails.exportData.enabled // false
-  ')
-
-  local methods=()
-  [[ -n "$has_snapshot" ]] && methods+=("Snapshot")
-  [[ "$has_export" == "true" ]] && methods+=("Export")
-
-  echo "[$(IFS=,; echo "${methods[*]}")]"
+  echo "$rpc_json" | jq -c '
+    [
+      (if ([.status.restorePointContentDetails.artifacts[]? | select(.volumeSnapshot != null)] | length) > 0 then "Snapshot" else empty end),
+      (if (.status.restorePointContentDetails.exportData.enabled // false) then "Export" else empty end)
+    ]
+  ' 2>/dev/null || echo '[]'
 }
 
 # Format VM restore point for text output
@@ -282,8 +278,8 @@ format_vm_restore_point_text() {
     local disks_json
     disks_json=$(get_disk_info "$rpc_json")
 
-    if [[ $(echo "$disks_json" | jq -s 'length') -gt 0 ]]; then
-      echo "$disks_json" | jq -r '. | "│  ├─ \(.name) (\(.size)) - \(.type)"'
+    if [[ $(echo "$disks_json" | jq 'length') -gt 0 ]]; then
+      echo "$disks_json" | jq -r '.[] | "│  ├─ \(.name) (\(.size)) - \(.type)"'
     else
       echo "│  └─ No disks found"
     fi
@@ -291,7 +287,11 @@ format_vm_restore_point_text() {
 
   echo "├─ MAC Preserved: ${mac_preserved}"
   echo "├─ Freeze Annotation: ${freeze_annotation}"
-  echo "└─ Restore Methods: ${restore_methods}"
+  if [[ $(echo "$restore_methods" | jq 'length') -gt 0 ]]; then
+    echo "└─ Restore Methods: $(echo "$restore_methods" | jq -r 'join(", ")')"
+  else
+    echo "└─ Restore Methods: None"
+  fi
   echo ""
 }
 
@@ -319,7 +319,7 @@ format_vm_restore_point_json() {
     --arg vm_resources "$vm_resources" \
     --arg mac_preserved "$mac_preserved" \
     --arg freeze_annotation "$freeze_annotation" \
-    --arg restore_methods "$restore_methods" \
+    --argjson restore_methods "$restore_methods" \
     --argjson disks "$disks_json" \
     '{
       name: $name,

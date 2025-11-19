@@ -278,15 +278,17 @@ initialize_restore_context_from_rpc() {
 # Get DataVolumes from restore point
 get_datavolumes_from_rpc() {
   local rpc_json=$1
-  echo "$rpc_json" | jq -r '
-    .status.restorePointContentDetails.artifacts[]? |
-    select(.resource.group == "cdi.kubevirt.io" and .resource.resource == "datavolumes") |
-    {
-      name: .resource.name,
-      size: (.artifact.spec.pvc.resources.requests.storage // "Unknown"),
-      hasSnapshot: (.volumeSnapshot != null)
-    }
-  ' 2>/dev/null
+  echo "$rpc_json" | jq -c '
+    [
+      .status.restorePointContentDetails.artifacts[]? |
+      select(.resource.group == "cdi.kubevirt.io" and .resource.resource == "datavolumes") |
+      {
+        name: .resource.name,
+        size: (.artifact.spec.pvc.resources.requests.storage // "Unknown"),
+        hasSnapshot: (.volumeSnapshot != null)
+      }
+    ]
+  ' 2>/dev/null || echo '[]'
 }
 
 # Validate restore prerequisites
@@ -300,14 +302,14 @@ validate_restore() {
   local datavolumes
   datavolumes=$(get_datavolumes_from_rpc "$rpc_json")
   local dv_count
-  dv_count=$(echo "$datavolumes" | jq -s 'length')
+  dv_count=$(echo "$datavolumes" | jq 'length')
 
   if [[ $dv_count -eq 0 ]]; then
     log_error "No DataVolumes found in restore point"
     ((errors++))
   else
     log_success "Found ${dv_count} DataVolume(s) in restore point"
-    echo "$datavolumes" | jq -r '. | "  - \(.name) (\(.size)) - Snapshot: \(.hasSnapshot)"'
+    echo "$datavolumes" | jq -r '.[] | "  - \(.name) (\(.size)) - Snapshot: \(.hasSnapshot)"'
   fi
 
   # Check storage class
@@ -368,7 +370,11 @@ generate_restore_plan() {
 
   local datavolumes
   datavolumes=$(get_datavolumes_from_rpc "$rpc_json")
-  echo "$datavolumes" | jq -r '. | "   - DataVolume: \(.name)"'
+  if [[ $(echo "$datavolumes" | jq 'length') -gt 0 ]]; then
+    echo "$datavolumes" | jq -r '.[] | "   - DataVolume: \(.name)"'
+  else
+    echo "   - DataVolumes: none found in restore point"
+  fi
 
   echo "   - VirtualMachine: ${VM_NAME}"
 
