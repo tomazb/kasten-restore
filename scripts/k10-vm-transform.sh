@@ -180,7 +180,12 @@ EOF
 # Generate VirtualMachine transforms
 generate_vm_transforms() {
   local vm_name_override=$1
+  local vm_details=$2
 
+  if [[ -z "$vm_details" ]]; then
+    echo "Error: vm_details is empty or not provided to generate_vm_transforms" >&2
+    exit 1
+  fi
   cat <<EOF
   # VirtualMachine: Clear dataVolumeTemplates
   - subject:
@@ -195,11 +200,23 @@ generate_vm_transforms() {
 EOF
 
   if [[ "$NEW_MAC" == true ]]; then
-    cat <<'EOF'
-      # Remove MAC addresses to generate new ones
+    # Count interfaces to generate patches for all of them
+    local interface_count
+    interface_count=$(echo "$vm_details" | jq -r '
+      .status.restorePointContentDetails.artifacts[]? |
+      select(.resource.group == "kubevirt.io" and .resource.resource == "virtualmachines") |
+      .artifact.spec.template.spec.domain.devices.interfaces | length
+    ' | head -1 || echo "0")
+
+    if [[ "$interface_count" -gt 0 ]]; then
+      echo "      # Remove MAC addresses to generate new ones"
+      for ((i=0; i<interface_count; i++)); do
+        cat <<EOF
       - op: remove
-        path: /spec/template/spec/domain/devices/interfaces/0/macAddress
+        path: /spec/template/spec/domain/devices/interfaces/${i}/macAddress
 EOF
+      done
+    fi
   fi
 
   if [[ -n "$vm_name_override" ]]; then
@@ -276,7 +293,7 @@ EOF
   echo ""
   generate_pvc_transforms
   echo ""
-  generate_vm_transforms "$VM_NAME"
+  generate_vm_transforms "$VM_NAME" "$vm_details"
 
   # Add namespace transform if needed
   if [[ -n "$NEW_NAMESPACE" ]]; then

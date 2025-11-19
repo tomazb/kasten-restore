@@ -397,8 +397,8 @@ get_vm_disks() {
 check_vm_freeze_annotation() {
   local vm_name=$1
   local namespace=$2
-  kubectl get vm ${vm_name} -n ${namespace} \
-    -o jsonpath='{.metadata.annotations.k10\.kasten\.io/freezeVM}'
+  kubectl get vm "${vm_name}" -n "${namespace}" -o json 2>/dev/null | \
+    jq -r '.metadata.annotations["k10.kasten.io/freezeVM"] // ""'
 }
 
 # Validate OpenShift Virtualization is installed
@@ -422,11 +422,17 @@ wait_for_vm_ready() {
   local vm_name=$1
   local namespace=$2
   local timeout=${3:-300}  # 5 minutes default
-  
-  echo "Waiting for VM ${vm_name} to be ready..."
-  kubectl wait --for=condition=Ready \
-    vm/${vm_name} -n ${namespace} \
-    --timeout=${timeout}s
+
+  log_info "Waiting for VM ${vm_name} to be ready (timeout: ${timeout}s)..."
+  if kubectl wait --for=condition=Ready \
+    vm/"${vm_name}" -n "${namespace}" \
+    --timeout="${timeout}s" 2>/dev/null; then
+    log_success "VM ${vm_name} is ready"
+    return 0
+  else
+    log_warning "VM ${vm_name} did not become ready within ${timeout}s"
+    return 1
+  fi
 }
 
 # Check VM guest agent availability

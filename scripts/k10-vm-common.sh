@@ -49,8 +49,7 @@ get_vm_disks() {
 check_vm_freeze_annotation() {
   local vm_name=$1
   local namespace=$2
-  kubectl get vm "${vm_name}" -n "${namespace}" \
-    -o jsonpath='{.metadata.annotations.k10\.kasten\.io/freezeVM}' 2>/dev/null || echo ""
+  kubectl get vm "${vm_name}" -n "${namespace}" -o jsonpath='{.metadata.annotations.k10\.kasten\.io/freezeVM}' 2>/dev/null || echo ""
 }
 
 # Validate OpenShift Virtualization is installed
@@ -232,19 +231,47 @@ validate_namespace_capacity() {
 }
 
 # Get K10 namespace
+# Usage:
+#   get_k10_namespace [preferred_namespace]
+# Behavior:
+#   - If preferred namespace is provided (arg or K10_NAMESPACE env), return it.
+#   - If multiple namespaces match automatically, fail with an error and require explicit selection.
+#   - If none match automatically, fail and require explicit selection.
 get_k10_namespace() {
-  local k10_ns
-  k10_ns=$(kubectl get namespace -o json | \
-    jq -r '.items[] | select(.metadata.name | test("kasten|k10")) | .metadata.name' | \
-    head -1 || echo "kasten-io")
+  local preferred=${1:-${K10_NAMESPACE:-}}
 
-  if [[ -z "$k10_ns" ]]; then
-    k10_ns="kasten-io"
+  if [[ -n "$preferred" ]]; then
+    echo "$preferred"
+    return 0
   fi
 
-  echo "$k10_ns"
-}
+  local k10_ns_list
+  k10_ns_list=$(kubectl get namespace -o json | \
+    jq -r '.items[] | select(.metadata.name | test("kasten|k10")) | .metadata.name')
 
+  local count
+  count=$(echo "$k10_ns_list" | wc -w)
+
+  if [[ $count -gt 1 ]]; then
+# Check if K10 is installed
+check_k10_installed() {
+  local k10_ns_arg=${1:-${K10_NAMESPACE:-}}
+  local k10_ns
+  k10_ns=$(get_k10_namespace "${k10_ns_arg}") || {
+    log_error "Unable to determine Kasten K10 namespace. Set K10_NAMESPACE or pass the namespace to check_k10_installed."
+    return 1
+  }
+
+  if namespace_exists "${k10_ns}"; then
+    if kubectl get crd restorepointcontents.apps.kio.kasten.io &>/dev/null; then
+      log_success "Kasten K10 is installed in namespace ${k10_ns}"
+      return 0
+    fi
+  fi
+
+  log_error "Kasten K10 not found in namespace ${k10_ns}"
+  return 1
+}
 # Check if K10 is installed
 check_k10_installed() {
   local k10_ns
@@ -342,11 +369,12 @@ validate_vm_restore_prerequisites() {
 
   if [[ $errors -gt 0 ]]; then
     log_error "Prerequisite validation failed with ${errors} error(s)"
-    return 1
-  fi
-
-  log_success "All prerequisites validated successfully"
-  return 0
+# Parse size string (e.g., "30Gi" -> 30Gi)
+# Parse size string and extract numeric value (e.g., "30Gi" -> 30)
+parse_size() {
+  local size=$1
+  # Extract numeric value from size string (e.g., "30Gi" -> "30")
+  echo "$size" | grep -oE '^[0-9]+'
 }
 
 # Generate timestamp for naming
@@ -361,12 +389,12 @@ sanitize_k8s_name() {
   echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63 | sed 's/-$//'
 }
 
-# Parse size string (e.g., "30Gi" -> 30)
+# Parse size string (e.g., "30Gi" -> 30Gi)
+# Parse size string and extract numeric value (e.g., "30Gi" -> 30)
 parse_size() {
   local size=$1
-  # Remove all non-numeric characters
-  echo "${size//[^0-9]/}"
-}
+  # Extract numeric value from size string (e.g., "30Gi" -> "30")
+  echo "$size" | grep -oE '^[0-9]+'
 
 # Wait for resource with timeout
 wait_for_resource() {

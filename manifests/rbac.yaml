@@ -74,11 +74,12 @@ rules:
       - namespaces
     verbs: ["get", "list", "create", "watch", "update", "patch"]
 
-  # ConfigMaps and Secrets - For cloud-init and VM configuration
+  # ConfigMaps - For cloud-init and VM configuration
+  # (Secret access should be granted via namespace-scoped Roles if needed)
+  # Removed cluster-wide secret access for improved security.
   - apiGroups: [""]
     resources:
       - configmaps
-      - secrets
     verbs: ["get", "list", "create", "watch"]
 
   # Resource Quotas - Read access for validation

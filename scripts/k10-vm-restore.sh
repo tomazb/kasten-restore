@@ -153,8 +153,10 @@ get_rpc_details() {
   kubectl get restorepointcontent "$rpc_name" -A -o json 2>/dev/null || echo '{}'
 }
 
-# Extract information from restore point
-extract_rpc_info() {
+# Initialize restore context from restore point
+# Note: This function sets global variables NAMESPACE, TARGET_NAMESPACE, and VM_NAME
+# if they are not already set by command line arguments.
+initialize_restore_context_from_rpc() {
   local rpc_json=$1
 
   local vm_name namespace
@@ -432,7 +434,9 @@ post_restore_actions() {
   log_info "Performing post-restore actions..."
 
   # Wait for VM to be created
-  if wait_for_resource "vm" "$VM_NAME" "$TARGET_NAMESPACE" "" 120; then
+  # Note: Extended timeout (300s) to account for DataVolume provisioning and CDI import operations
+  # which can take longer than standard resource creation
+  if wait_for_resource "vm" "$VM_NAME" "$TARGET_NAMESPACE" "" 300; then
     log_success "VirtualMachine created: ${VM_NAME}"
   else
     log_warning "VirtualMachine not created within timeout"
@@ -443,16 +447,18 @@ post_restore_actions() {
   if [[ "$NO_START" == true ]]; then
     log_info "Ensuring VM is stopped..."
     kubectl patch vm "$VM_NAME" -n "$TARGET_NAMESPACE" \
-      --type=json -p='[{"op":"replace","path":"/spec/running","value":false}]' 2>/dev/null || true
-    log_success "VM configured to remain stopped"
   else
     log_info "VM will start automatically"
     # Wait for VMI if VM should be running
+    # Note: Extended timeout (300s) to accommodate VM boot time, which includes:
+    # - PVC binding, - Volume attachment, - Guest OS initialization
     sleep 10
-    if wait_for_resource "vmi" "$VM_NAME" "$TARGET_NAMESPACE" "" 120; then
+    if wait_for_resource "vmi" "$VM_NAME" "$TARGET_NAMESPACE" "" 300; then
       log_success "VirtualMachineInstance is running"
     else
       log_warning "VirtualMachineInstance not running yet (may take time to boot)"
+    fi
+  fi
     fi
   fi
 
@@ -614,7 +620,7 @@ main() {
   log_success "Restore point found: ${RESTORE_POINT}"
 
   # Extract RPC information
-  if ! extract_rpc_info "$rpc_json"; then
+  if ! initialize_restore_context_from_rpc "$rpc_json"; then
     exit 1
   fi
 

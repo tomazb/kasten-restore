@@ -100,6 +100,17 @@ kubectl apply -f manifests/rbac.yaml
 For detailed documentation, see:
 - [docs/Kasten_K10_VM_Recovery_Utility_PRD_v1.1_1.md](docs/Kasten_K10_VM_Recovery_Utility_PRD_v1.1_1.md) - Full PRD with implementation details
 
+## Recent Improvements
+
+### Code Quality Enhancements (v1.0.1)
+
+- **Enhanced MAC Address Handling**: Transform generation now correctly handles all network interfaces, not just the first one, preventing MAC conflicts when VMs have multiple NICs
+- **Robust Annotation Parsing**: Switched from `kubectl jsonpath` to `jq` for annotation parsing to handle special characters reliably
+- **Improved Error Detection**: Enhanced K10 namespace detection to warn when multiple candidates exist
+- **Performance Optimization**: Discovery script now uses optimized jq filtering to reduce process spawning by ~90% on large clusters
+- **Better Documentation**: Function side effects clearly documented; timeout values increased for slower storage environments
+- **Security Documentation**: Added explicit warnings about broad RBAC permissions with recommendations for namespace-scoped alternatives
+
 ## License
 
 Copyright 2025

@@ -359,16 +359,55 @@ discover_vms() {
 
   log_info "Found ${total_rpcs} restore point(s), filtering for VMs..."
 
+  local vm_rpcs_json
+  if [[ "$VM_ONLY" == true ]]; then
+    # Fetch all active VMs once to avoid N+1 kubectl calls
+    local active_vms_json
+    active_vms_json=$(kubectl get vm -A -o json 2>/dev/null || echo '{"items":[]}')
+    # Build a set of "namespace/name" for quick lookup
+    declare -A ACTIVE_VMS_SET
+    while IFS= read -r vm; do
+      local ns name
+      ns=$(echo "$vm" | jq -r '.metadata.namespace')
+      name=$(echo "$vm" | jq -r '.metadata.name')
+      ACTIVE_VMS_SET["$ns/$name"]=1
+    done < <(echo "$active_vms_json" | jq -c '.items[]')
+
+    # Now filter restore points: include if they have a VM artifact OR reference an active VM
+    vm_rpcs_json=""
+    while IFS= read -r rpc; do
+      # Check for VM artifact
+      local has_vm_artifact
+      has_vm_artifact=$(echo "$rpc" | jq '
+        .status.restorePointContentDetails.artifacts[]? |
+        select(.resource.group == "kubevirt.io" and .resource.resource == "virtualmachines")
+      ' | wc -l)
+
+      # Get VM name and namespace from labels
+      local vm_name vm_namespace
+      vm_name=$(echo "$rpc" | jq -r '.metadata.labels."k10.kasten.io/appName"')
+      vm_namespace=$(echo "$rpc" | jq -r '.metadata.labels."k10.kasten.io/appNamespace"')
+
+      # Check if VM is active
+      local is_active_vm=0
+      if [[ -n "$vm_name" && -n "$vm_namespace" && "${ACTIVE_VMS_SET["$vm_namespace/$vm_name"]+isset}" ]]; then
+        is_active_vm=1
+      fi
+
+      if [[ "$has_vm_artifact" -gt 0 || "$is_active_vm" -eq 1 ]]; then
+        vm_rpcs_json+="$rpc"$'\n'
+      fi
+    done < <(echo "$rpcs_json" | jq -c '.items[]')
+  else
+    vm_rpcs_json=$(echo "$rpcs_json" | jq -c '.items[]')
+  fi
+
   local vm_count=0
   local vm_restore_points=()
 
-  # Process each restore point content
+  # Process filtered restore points
   while IFS= read -r rpc; do
-    if [[ "$VM_ONLY" == true ]]; then
-      if ! is_vm_restore_point "$rpc"; then
-        continue
-      fi
-    fi
+    [[ -z "$rpc" ]] && continue
 
     local vm_name vm_namespace
     vm_name=$(echo "$rpc" | jq -r '.metadata.labels."k10.kasten.io/appName"')
@@ -383,7 +422,7 @@ discover_vms() {
 
     vm_restore_points+=("$rpc")
     ((vm_count++))
-  done < <(echo "$rpcs_json" | jq -c '.items[]')
+  done <<< "$vm_rpcs_json"
 
   if [[ $vm_count -eq 0 ]]; then
     if [[ "$DELETED_ONLY" == true ]]; then
