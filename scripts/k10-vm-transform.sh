@@ -254,9 +254,13 @@ generate_transform_set() {
   source_vm_name=$(echo "$vm_details" | jq -r '.metadata.labels."k10.kasten.io/appName" // "unknown"')
   source_namespace=$(echo "$vm_details" | jq -r '.metadata.labels."k10.kasten.io/appNamespace" // "unknown"')
 
-  # Generate transform name if not provided
+  # Generate deterministic transform name if not provided
   if [[ -z "$TRANSFORM_NAME" ]]; then
-    TRANSFORM_NAME="vm-restore-transforms-${source_vm_name}-$(generate_timestamp)"
+    local rpc_prefix
+    rpc_prefix=$(sanitize_k8s_name "$RESTORE_POINT" | cut -c1-20)
+    local ns_part=""
+    if [[ -n "$NEW_NAMESPACE" ]]; then ns_part="-${NEW_NAMESPACE}"; fi
+    TRANSFORM_NAME="vm-restore-transforms-${source_vm_name}-${rpc_prefix}${ns_part}"
   fi
 
   # Sanitize transform name

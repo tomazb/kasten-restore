@@ -1,4 +1,5 @@
 # **Product Requirements Document (PRD)**
+
 ## **Kasten K10 VM Recovery Utility Scripts (MVP)**
 
 **Version:** 1.1  
@@ -18,6 +19,7 @@ Build utility scripts specifically for recovering OpenShift Virtualization VMs f
 ## **2. Problem Statement - VM Recovery Context**
 
 **Current Pain Points for VM Recovery:**
+
 - Manual VM restore requires understanding DataVolume, PVC, and VM resource relationships
 - Restoring backed up Virtual Machines requires K10 transforms to be applied to instruct the OpenShift Virtualization operator to not handle data import/population activities
 - Complex dependency between VirtualMachine, DataVolume, and PVC resources
@@ -26,6 +28,7 @@ Build utility scripts specifically for recovering OpenShift Virtualization VMs f
 - Difficulty managing VM-specific transforms for CDI (Containerized Data Importer)
 
 **Target Users:**
+
 - Platform teams managing OpenShift Virtualization
 - VM administrators requiring self-service recovery
 - Disaster recovery operators handling VM workloads
@@ -35,6 +38,7 @@ Build utility scripts specifically for recovering OpenShift Virtualization VMs f
 ## **3. Goals & Non-Goals - MVP**
 
 ### **Goals**
+
 1. Automate discovery of VM restore points with disk information
 2. Handle VM-specific transforms automatically (DataVolume, PVC transforms)
 3. Support VM restore to same/different namespace with proper CDI handling
@@ -43,6 +47,7 @@ Build utility scripts specifically for recovering OpenShift Virtualization VMs f
 6. Prefer CSI snapshots for VM disks when available
 
 ### **Non-Goals (Deferred to Phase 2)**
+
 - Live migration during restore
 - Multi-VM batch restore orchestration
 - VM template management
@@ -56,7 +61,7 @@ Build utility scripts specifically for recovering OpenShift Virtualization VMs f
 
 ### **4.1 VM Resource Hierarchy**
 
-```
+```text
 VirtualMachine (VM)
 ├── VirtualMachineInstance (VMI) [Runtime]
 ├── DataVolume(s) [Disk definitions]
@@ -65,12 +70,14 @@ VirtualMachine (VM)
 ```
 
 **Key K10 Discovery Points:**
+
 - K10 automatically discovers Virtual Machines and treats them as workloads when OpenShift Virtualization is enabled
 - K10 8.0+ added support for restoring individual volumes of existing virtual machines in OpenShift Virtualization 4.18
 
 ### **4.2 VM Backup Artifacts**
 
 K10 captures:
+
 1. **VM Manifest:** VirtualMachine resource definition
 2. **DataVolume Definitions:** Disk specifications
 3. **PVC Snapshots:** Actual disk data (via CSI snapshots)
@@ -93,6 +100,7 @@ K10 captures:
 ```
 
 **VM-Specific Output Fields:**
+
 - VM name and namespace
 - Running state at backup time (Running/Stopped)
 - Disk count and sizes
@@ -127,7 +135,8 @@ jq '.artifacts[] |
 ```
 
 **Sample Output:**
-```
+
+```text
 VM RESTORE POINTS FOUND: 2
 
 Name: rpc-rhel9-vm-backup-20251117
@@ -200,7 +209,8 @@ validate_vm_restore() {
 **Critical Transforms Required:**
 Transforms are used to instruct the OpenShift Virtualization operator to not handle data import/population activities and let K10 restore the data.
 
-**Transform 1: DataVolume Resource**
+#### Transform 1: DataVolume Resource
+
 ```yaml
 # Disable CDI import/clone operations
 transforms:
@@ -216,7 +226,8 @@ transforms:
         value: "<pvc-name>"
 ```
 
-**Transform 2: PersistentVolumeClaim Resource**
+#### Transform 2: PersistentVolumeClaim Resource
+
 ```yaml
 # Add CDI annotations to PVC
 transforms:
@@ -232,7 +243,8 @@ transforms:
         value: "Bound"
 ```
 
-**Transform 3: VirtualMachine Resource**
+#### Transform 3: VirtualMachine Resource
+
 ```yaml
 # Update VM to reference restored DataVolumes
 transforms:
@@ -449,18 +461,21 @@ check_vm_guest_agent() {
 ## **6. VM-Specific Non-Functional Requirements**
 
 ### **6.1 Performance**
+
 - VM discovery: < 10 seconds for 50 VMs
 - Restore initialization: < 60 seconds
 - Disk restore: Dependent on data size (baseline: match K10 UI)
 - VM boot time: Not controlled by script (depends on VM resources)
 
 ### **6.2 VM State Preservation**
+
 - MAC addresses preserved by default (K10 8.0+ feature)
 - CPU/Memory allocation maintained
 - Network configuration retained
 - Cloud-init data restored correctly
 
 ### **6.3 Compatibility**
+
 - OpenShift Virtualization 4.14+ (included in OCP 4.18)
 - KubeVirt VMs (VirtualMachine, VirtualMachineInstance)
 - CDI (Containerized Data Importer) v1.55+
@@ -564,24 +579,28 @@ kubectl create namespace vms-archive
 ## **8. Implementation Priority - MVP**
 
 ### **Phase 1 (Week 1-2): Core VM Discovery**
+
 - `k10-vm-discover.sh` basic functionality
 - VM-specific filtering
 - DataVolume and disk identification
 - Snapshot vs export detection
 
 ### **Phase 2 (Week 3-4): Basic VM Restore**
+
 - `k10-vm-restore.sh` core logic
 - RestoreAction creation with VM transforms
 - DataVolume → PVC → VM restore order
 - Same-namespace restore only
 
 ### **Phase 3 (Week 5-6): Transform Handling**
+
 - `k10-vm-transform.sh` implementation
 - CDI transform generation
 - MAC address handling
 - Storage class mapping
 
 ### **Phase 4 (Week 7-8): Cross-Namespace & Polish**
+
 - Different namespace restore
 - VM naming options
 - Error handling and recovery
@@ -592,10 +611,12 @@ kubectl create namespace vms-archive
 ## **9. Testing Strategy - VM Focus**
 
 ### **9.1 Test Environment**
+
 - OpenShift 4.18 cluster
 - OpenShift Virtualization operator installed
 - K10 8.x with CSI snapshot support
 - Test VMs: RHEL 9, Windows Server (if license available), Ubuntu
+
 
 ### **9.2 VM Test Scenarios**
 
@@ -772,35 +793,35 @@ spec:
 
 ### **12.1 Quick Start Guide**
 
-```markdown
-# Kasten K10 VM Recovery - Quick Start
+#### Prerequisites
 
-## Prerequisites
 - OpenShift 4.18 with Virtualization
 - Kasten K10 v8.x installed
 - VMs backed up by K10 policies
 
-## 5-Minute VM Restore
+#### 5-Minute VM Restore
 
 1. Find your VM's restore point:
-   ```bash
-   ./k10-vm-discover.sh --vm my-rhel-vm --namespace vms-prod
-   ```
 
-2. Restore the VM:
-   ```bash
-   ./k10-vm-restore.sh \
-     --restore-point rpc-my-rhel-vm-<timestamp> \
-     --namespace vms-prod
-   ```
+```bash
+./k10-vm-discover.sh --vm my-rhel-vm --namespace vms-prod
+```
 
-3. Verify:
-   ```bash
-   kubectl get vm my-rhel-vm -n vms-prod
-   ```
+1. Restore the VM:
+
+```bash
+./k10-vm-restore.sh \
+  --restore-point rpc-my-rhel-vm-<timestamp> \
+  --namespace vms-prod
+```
+
+1. Verify:
+
+```bash
+kubectl get vm my-rhel-vm -n vms-prod
+```
 
 Done! Your VM is restored.
-```
 
 ### **12.2 Advanced Usage**
 
@@ -815,6 +836,7 @@ Done! Your VM is restored.
 ## **13. Dependencies & Assumptions - VM Context**
 
 ### **Dependencies:**
+
 - OpenShift Virtualization 4.14+ (OCP 4.18 includes 4.18)
 - Kasten K10 v8.0+ (for MAC preservation feature)
 - CDI (Containerized Data Importer) installed
@@ -822,6 +844,7 @@ Done! Your VM is restored.
 - VolumeSnapshotClass annotated with k10.kasten.io/is-snapshot-class=true
 
 ### **Assumptions:**
+
 - [Inference] VMs use standard KubeVirt VirtualMachine CRDs
 - [Inference] VM disks are primarily on DataVolumes (not hostPath)
 - VM annotation k10.kasten.io/freezeVM=true is used if filesystem freeze is needed during backup
@@ -882,6 +905,7 @@ rules:
 ## **15. Known Limitations - MVP**
 
 ### **Out of Scope:**
+
 - Windows VM-specific optimizations (basic restore only)
 - Live migration or hot-plug disk restore
 - VM template/golden image restoration
@@ -891,6 +915,7 @@ rules:
 - Custom VM scheduling constraints
 
 ### **Technical Constraints:**
+
 - Freeze/thaw timeout configurable via helm with default 5 minutes
 - [Inference] Large VM disks (>500Gi) may require extended timeouts
 - [Unverified] Some VM configurations may require manual validation
@@ -900,13 +925,15 @@ rules:
 ## **16. References & Sources - VM Focus**
 
 **Primary Sources:**
-1. Kasten K10 OpenShift Virtualization Documentation: https://docs.kasten.io/5.5.0/usage/openshift_virtualization.html
-2. Kasten K10 v8.0 Release Notes: https://docs.kasten.io/latest/releasenotes/
-3. Kasten K10 API - RestorePoints: https://docs.kasten.io/latest/api/restorepoints/
-4. Kasten K10 API - Actions: https://docs.kasten.io/latest/api/actions/
-5. OpenShift Virtualization on OCP 4.18: Integration context from search results
+
+1. [Kasten K10 OpenShift Virtualization Documentation](https://docs.kasten.io/5.5.0/usage/openshift_virtualization.html)
+1. [Kasten K10 v8.0 Release Notes](https://docs.kasten.io/latest/releasenotes/)
+1. [Kasten K10 API - RestorePoints](https://docs.kasten.io/latest/api/restorepoints/)
+1. [Kasten K10 API - Actions](https://docs.kasten.io/latest/api/actions/)
+1. OpenShift Virtualization on OCP 4.18: Integration context from search results
 
 **Confidence Assessment:**
+
 - **82% confidence** based on:
   - Official K10 VM documentation (70% of requirements)
   - K10 v8.0+ release notes (15% - MAC preservation, individual volume restore)
@@ -914,6 +941,7 @@ rules:
   - [Inference] CDI transform patterns (5% - based on CDI behavior, not explicitly documented)
 
 **Gaps:**
+
 - [Unverified] Specific OpenShift 4.18 VM features integration with K10 8.x
 - [Unverified] Windows VM guest agent behavior during restore
 - [Inference] Optimal transform patterns for complex multi-disk VMs
@@ -923,21 +951,25 @@ rules:
 ## **17. Next Steps - MVP Implementation**
 
 ### **Sprint 1 (2 weeks):** Core Discovery
+
 - Implement `k10-vm-discover.sh`
 - VM filtering and metadata extraction
 - DataVolume relationship mapping
 
 ### **Sprint 2 (2 weeks):** Basic Restore
+
 - Implement `k10-vm-restore.sh` (same-namespace only)
 - RestoreAction creation with VM transforms
 - Integration testing with RHEL VMs
 
 ### **Sprint 3 (2 weeks):** Transform Engine
+
 - Implement `k10-vm-transform.sh`
 - CDI transform generation
 - MAC address handling
 
 ### **Sprint 4 (2 weeks):** Polish & Cross-Namespace
+
 - Cross-namespace restore support
 - Error handling improvements
 - User documentation
@@ -950,6 +982,7 @@ rules:
 ## **Appendix A: Key Kasten K10 API Resources**
 
 ### **RestorePointContent API**
+
 ```bash
 # List all restore point contents
 kubectl get restorepointcontents.apps.kio.kasten.io -A
@@ -962,6 +995,7 @@ kubectl get --raw /apis/apps.kio.kasten.io/v1alpha1/restorepointcontents/<name>/
 ```
 
 ### **RestoreAction API**
+
 ```bash
 # Create restore action
 kubectl create -f restore-action.yaml
@@ -974,7 +1008,8 @@ kubectl get restoreaction <name> -n <namespace> -o jsonpath='{.status.state}'
 ```
 
 ### **Key Labels for Filtering**
-```
+
+```text
 k10.kasten.io/appName=<application-name>
 k10.kasten.io/appNamespace=<namespace>
 k10.kasten.io/policyName=<policy-name>
@@ -984,7 +1019,7 @@ k10.kasten.io/policyName=<policy-name>
 
 ## **Appendix B: VM Resource Relationships**
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                     VirtualMachine (VM)                      │
 │  - spec.running: true/false                                  │
@@ -1009,6 +1044,7 @@ k10.kasten.io/policyName=<policy-name>
 ```
 
 **Restore Flow:**
+
 1. K10 RestoreAction created
 2. DataVolumes created (with CDI transforms)
 3. PVCs created from snapshots
@@ -1072,9 +1108,10 @@ spec:
 
 ---
 
-**Document End**
+### Document End
 
 **Approval Checklist:**
+
 - [ ] Technical approach validated
 - [ ] VM-specific transforms verified with K10 team
 - [ ] Test environment provisioned (OCP 4.18 + K10 8.x + VMs)

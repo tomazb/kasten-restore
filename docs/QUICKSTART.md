@@ -88,6 +88,30 @@ The script will:
 3. Monitor the restore progress
 4. Verify the restore completion
 
+### Step 3b: Handle Conflicts or Reruns (Optional)
+
+If a VM with the same name already exists in the target namespace, you can:
+
+- Clone on conflict to a unique name:
+
+```bash
+./scripts/k10-vm-restore.sh \
+  --restore-point rpc-myvm-20251117 \
+  --namespace vms-prod \
+  --clone-on-conflict \
+  --yes
+```
+
+- Force cleanup prior K10 artifacts (TransformSet/RestoreAction) and re-run:
+
+```bash
+./scripts/k10-vm-restore.sh \
+  --restore-point rpc-myvm-20251117 \
+  --namespace vms-prod \
+  --force \
+  --yes
+```
+
 ### Step 4: Verify the Restore
 
 Check the VM status:
@@ -116,6 +140,7 @@ Clone a production VM to a test environment:
 ```
 
 **What this does:**
+
 - Creates the `vms-test` namespace if it doesn't exist
 - Restores the VM as `rhel9-webserver-test`
 - Generates new MAC addresses to avoid conflicts
@@ -203,6 +228,7 @@ Use the transforms in restore:
 Discover VM restore points with disk details.
 
 **Common Options:**
+
 - `--vm <name>` - VM name to search for
 - `--namespace <ns>` - Namespace to search in
 - `--all` - Show all VMs across all namespaces
@@ -214,6 +240,7 @@ Discover VM restore points with disk details.
 Generate VM-specific transforms for restore operations.
 
 **Common Options:**
+
 - `--restore-point <rpc>` - Restore point content name (required)
 - `--output <file>` - Output file for transforms
 - `--new-storage-class <sc>` - Target storage class
@@ -225,6 +252,7 @@ Generate VM-specific transforms for restore operations.
 Execute VM restore operations.
 
 **Common Options:**
+
 - `--restore-point <rpc>` - Restore point content name (required)
 - `--namespace <ns>` - Source namespace
 - `--target-namespace <ns>` - Target namespace for restore
@@ -234,6 +262,8 @@ Execute VM restore operations.
 - `--dry-run` - Show what would be done without executing
 - `--validate` - Validate restore feasibility
 - `--create-namespace` - Create target namespace if it doesn't exist
+- `--clone-on-conflict` - If VM exists, restore to a unique clone name (`<vm>-clone[-N]`)
+- `--force` - Remove previous K10 artifacts (TransformSet/RestoreAction) for this VM/restore point
 - `--yes` - Auto-confirm without prompting
 
 ## Troubleshooting
@@ -245,6 +275,7 @@ Execute VM restore operations.
 **Problem:** The specified restore point doesn't exist.
 
 **Solution:**
+
 ```bash
 # List all restore points
 ./scripts/k10-vm-discover.sh --all
@@ -258,6 +289,7 @@ kubectl get restorepointcontents -A | grep <vm-name>
 **Problem:** Storage class not available or misconfigured.
 
 **Solution:**
+
 ```bash
 # Check storage classes
 kubectl get storageclass
@@ -275,6 +307,7 @@ kubectl annotate volumesnapshotclass <name> \
 **Problem:** Insufficient resources or configuration issues.
 
 **Solution:**
+
 ```bash
 # Check namespace quotas
 kubectl get resourcequota -n <namespace>
@@ -291,6 +324,7 @@ kubectl describe vm <vm-name> -n <namespace>
 **Problem:** Restored VM has the same MAC address as an existing VM.
 
 **Solution:**
+
 ```bash
 # Delete the restored VM
 kubectl delete vm <vm-name> -n <namespace>
@@ -320,30 +354,35 @@ kubectl logs -n kasten-io -l app=k10 --tail=100
 ## Best Practices
 
 1. **Always validate before restoring:**
-   ```bash
-   --dry-run --validate
-   ```
 
-2. **Use new MAC addresses for clones:**
-   ```bash
-   --new-mac
-   ```
+  ```bash
+  --dry-run --validate
+  ```
 
-3. **Keep VMs stopped initially when cloning:**
-   ```bash
-   --no-start
-   ```
+1. **Use new MAC addresses for clones:**
 
-4. **Review generated transforms before applying:**
-   ```bash
-   ./scripts/k10-vm-transform.sh ... --output transforms.yaml
-   cat transforms.yaml
-   ```
+  ```bash
+  --new-mac
+  ```
 
-5. **Monitor restore progress:**
-   ```bash
-   kubectl get restoreactions -n <namespace> -w
-   ```
+1. **Keep VMs stopped initially when cloning:**
+
+  ```bash
+  --no-start
+  ```
+
+1. **Review generated transforms before applying:**
+
+  ```bash
+  ./scripts/k10-vm-transform.sh ... --output transforms.yaml
+  cat transforms.yaml
+  ```
+
+1. **Monitor restore progress:**
+
+  ```bash
+  kubectl get restoreactions -n <namespace> -w
+  ```
 
 ## Next Steps
 

@@ -25,6 +25,8 @@ CREATE_NAMESPACE=false
 TRANSFORM_FILE=""
 AUTO_CONFIRM=false
 RESTORE_ACTION_NAME=""
+CLONE_ON_CONFLICT=false
+FORCE=false
 
 # Usage function
 usage() {
@@ -38,6 +40,7 @@ OPTIONS:
   --namespace <ns>           Source namespace (required if not in restore point)
   --target-namespace <ns>    Target namespace for restore (default: same as source)
   --vm-name <name>           Override VM name for restore
+  --clone-on-conflict        If VM exists, restore to a cloned name (auto-suffix)
   --new-mac                  Generate new MAC addresses
   --no-start                 Don't auto-start VM after restore
   --dry-run                  Show what would be done without executing
@@ -46,6 +49,7 @@ OPTIONS:
   --new-storage-class <sc>   Target storage class
   --create-namespace         Create target namespace if it doesn't exist
   --transform-file <file>    Use custom transform file
+  --force                    Delete previous K10 artifacts (TransformSet/RestoreAction) and re-run
   --yes                      Auto-confirm without prompting
   --help                     Show this help message
 
@@ -94,6 +98,10 @@ parse_args() {
         VM_NAME="$2"
         shift 2
         ;;
+      --clone-on-conflict)
+        CLONE_ON_CONFLICT=true
+        shift
+        ;;
       --new-mac)
         NEW_MAC=true
         shift
@@ -126,6 +134,10 @@ parse_args() {
         TRANSFORM_FILE="$2"
         shift 2
         ;;
+      --force)
+        FORCE=true
+        shift
+        ;;
       --yes)
         AUTO_CONFIRM=true
         shift
@@ -145,6 +157,74 @@ parse_args() {
     log_error "Missing required option: --restore-point"
     usage
   fi
+}
+
+# Resolve a unique VM name by appending a clone suffix when needed
+resolve_clone_name() {
+  local base_name=$1
+  local namespace=$2
+  local candidate
+
+  candidate=$(sanitize_k8s_name "${base_name}-clone")
+  if ! kubectl get vm "${candidate}" -n "${namespace}" &>/dev/null; then
+    echo "${candidate}"
+    return 0
+  fi
+
+  local i
+  for i in $(seq 2 99); do
+    candidate=$(sanitize_k8s_name "${base_name}-clone-${i}")
+    if ! kubectl get vm "${candidate}" -n "${namespace}" &>/dev/null; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+
+  # Fallback to time-suffixed (less deterministic)
+  candidate=$(sanitize_k8s_name "${base_name}-clone-$(date +%s)")
+  echo "${candidate}"
+}
+
+# Compute deterministic names for TransformSet and RestoreAction
+compute_restore_names() {
+  local rpc_safe
+  rpc_safe=$(sanitize_k8s_name "$RESTORE_POINT" | cut -c1-20)
+  TRANSFORM_NAME=$(sanitize_k8s_name "vm-restore-transforms-${VM_NAME}-${rpc_safe}")
+  RESTORE_ACTION_NAME=$(sanitize_k8s_name "restore-${VM_NAME}-${rpc_safe}")
+}
+
+# Prompt helper
+confirm_action() {
+  local prompt_msg=$1
+  if [[ "$AUTO_CONFIRM" == true ]]; then
+    return 0
+  fi
+  echo ""
+  read -r -p "$prompt_msg [y/N] " response
+  case "$response" in
+    [yY][eE][sS]|[yY]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Force cleanup of K10 artifacts for this restore attempt
+force_cleanup() {
+  local k10_ns
+  k10_ns=$(get_k10_namespace)
+
+  local msg="Force cleanup will delete K10 resources if present:\n  - TransformSet ${TRANSFORM_NAME} (namespace: ${k10_ns})\n  - RestoreAction ${RESTORE_ACTION_NAME} (namespace: ${TARGET_NAMESPACE})\nContinue?"
+  if ! confirm_action "$msg"; then
+    log_info "Force cleanup cancelled by user"
+    return 0
+  fi
+
+  # Delete TransformSet only when we're managing transforms (no custom file provided)
+  if [[ -z "$TRANSFORM_FILE" ]]; then
+    kubectl delete transformset "${TRANSFORM_NAME}" -n "${k10_ns}" --ignore-not-found || true
+  fi
+  kubectl delete restoreaction "${RESTORE_ACTION_NAME}" -n "${TARGET_NAMESPACE}" --ignore-not-found || true
+
+  return 0
 }
 
 # Get restore point details
@@ -306,14 +386,20 @@ generate_restore_plan() {
 
 # Create transforms for restore
 create_restore_transforms() {
-  local transform_output
-  transform_output="/tmp/vm-restore-transforms-$(generate_timestamp).yaml"
+  local transform_name transform_output
+  # Use precomputed transform name for consistency
+  if [[ -z "${TRANSFORM_NAME:-}" ]]; then
+    compute_restore_names
+  fi
+  transform_name="$TRANSFORM_NAME"
+  transform_output="/tmp/${transform_name}.yaml"
 
-  log_info "Generating transforms..."
+  log_info "Generating transforms (name: ${transform_name})..."
 
   local transform_args=(
     "--restore-point" "$RESTORE_POINT"
     "--output" "$transform_output"
+    "--transform-name" "$transform_name"
   )
 
   [[ -n "$NEW_STORAGE_CLASS" ]] && transform_args+=("--new-storage-class" "$NEW_STORAGE_CLASS")
@@ -350,11 +436,24 @@ create_restore_action() {
   local rpc_name=$1
   local transform_name=$2
 
-  RESTORE_ACTION_NAME="restore-${VM_NAME}-$(generate_timestamp)"
-  RESTORE_ACTION_NAME=$(sanitize_k8s_name "$RESTORE_ACTION_NAME")
+  # Use precomputed restore action name for consistency
+  if [[ -z "${RESTORE_ACTION_NAME:-}" ]]; then
+    compute_restore_names
+  fi
 
   local k10_namespace
   k10_namespace=$(get_k10_namespace)
+
+  # If RestoreAction already exists, skip creation (idempotent behavior)
+  if kubectl get restoreaction "${RESTORE_ACTION_NAME}" -n "${TARGET_NAMESPACE}" &>/dev/null; then
+    if [[ "$FORCE" == true ]]; then
+      log_info "RestoreAction exists and --force set; deleting before re-create"
+      kubectl delete restoreaction "${RESTORE_ACTION_NAME}" -n "${TARGET_NAMESPACE}" --ignore-not-found || true
+    else
+      log_info "RestoreAction already exists: ${RESTORE_ACTION_NAME}. Skipping creation."
+      return 0
+    fi
+  fi
 
   log_info "Creating RestoreAction: ${RESTORE_ACTION_NAME}"
 
@@ -447,6 +546,8 @@ post_restore_actions() {
   if [[ "$NO_START" == true ]]; then
     log_info "Ensuring VM is stopped..."
     kubectl patch vm "$VM_NAME" -n "$TARGET_NAMESPACE" \
+      --type=json -p='[{"op":"replace","path":"/spec/running","value":false}]' 2>/dev/null || true
+    log_success "VM configured to remain stopped"
   else
     log_info "VM will start automatically"
     # Wait for VMI if VM should be running
@@ -457,8 +558,6 @@ post_restore_actions() {
       log_success "VirtualMachineInstance is running"
     else
       log_warning "VirtualMachineInstance not running yet (may take time to boot)"
-    fi
-  fi
     fi
   fi
 
@@ -553,6 +652,21 @@ execute_restore() {
     fi
   fi
 
+  # If VM already exists
+  if kubectl get vm "$VM_NAME" -n "$TARGET_NAMESPACE" &>/dev/null; then
+    if [[ "$CLONE_ON_CONFLICT" == true ]]; then
+      local new_name
+      new_name=$(resolve_clone_name "$VM_NAME" "$TARGET_NAMESPACE")
+      log_info "Target VM exists; cloning restore to VM name: ${new_name}"
+      VM_NAME="$new_name"
+      compute_restore_names
+    else
+      log_info "VM ${VM_NAME} already exists in ${TARGET_NAMESPACE}. Skipping restore and verifying..."
+      verify_restore
+      return 0
+    fi
+  fi
+
   # Create or use custom transforms
   local transform_file
   if [[ -n "$TRANSFORM_FILE" ]]; then
@@ -622,6 +736,18 @@ main() {
   # Extract RPC information
   if ! initialize_restore_context_from_rpc "$rpc_json"; then
     exit 1
+  fi
+
+  # If VM already exists and clone requested, resolve a clone name early (affects plan and transforms)
+  if kubectl get vm "$VM_NAME" -n "$TARGET_NAMESPACE" &>/dev/null && [[ "$CLONE_ON_CONFLICT" == true ]]; then
+    VM_NAME=$(resolve_clone_name "$VM_NAME" "$TARGET_NAMESPACE")
+    log_info "Using clone VM name: ${VM_NAME}"
+  fi
+
+  # Compute names and optionally perform force cleanup of previous artifacts
+  compute_restore_names
+  if [[ "$FORCE" == true ]]; then
+    force_cleanup || true
   fi
 
   # Validate restore

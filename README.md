@@ -1,6 +1,6 @@
 # Kasten K10 VM Recovery Utility Scripts (MVP)
 
-**Version:** 1.0.0
+**Version:** 1.0.2
 **Target Environment:** Kasten K10 v8.x on OpenShift 4.18 with OpenShift Virtualization
 
 ## Overview
@@ -83,6 +83,45 @@ kubectl get vm my-rhel-vm -n vms-prod
   --dry-run --validate
 ```
 
+### Handle Conflicts and Reruns
+
+Clone when the target VM already exists:
+
+```bash
+./scripts/k10-vm-restore.sh \
+  --restore-point rpc-myvm-20251117 \
+  --namespace vms-prod \
+  --clone-on-conflict \
+  --yes
+```
+
+Force cleanup of prior K10 artifacts (TransformSet/RestoreAction) and re-run:
+
+```bash
+./scripts/k10-vm-restore.sh \
+  --restore-point rpc-myvm-20251117 \
+  --namespace vms-prod \
+  --force \
+  --yes
+```
+
+Combine force + clone (when original VM exists):
+
+```bash
+./scripts/k10-vm-restore.sh \
+  --restore-point rpc-myvm-20251117 \
+  --namespace vms-prod \
+  --clone-on-conflict \
+  --force \
+  --yes
+```
+
+## Restore Flags
+
+- `--clone-on-conflict`: If a VM with the intended name already exists in the target namespace, restore to a unique clone name (`<vm>-clone`, `<vm>-clone-2`, …). Deterministic K10 resource names are derived from the final VM name and restore point.
+- `--force`: Before starting, remove previous K10 artifacts for this VM/restore point (TransformSet in the K10 namespace and RestoreAction in the target namespace). Prompts for confirmation unless `--yes` is provided. Does not delete existing VMs, PVCs, or DVs.
+- `--yes`: Auto-confirm prompts (use with `--force` for non-interactive reruns).
+
 ## Configuration
 
 See `examples/vm-restore-profile.yaml` for VMRestoreProfile configuration options.
@@ -98,6 +137,7 @@ kubectl apply -f manifests/rbac.yaml
 ## Documentation
 
 For detailed documentation, see:
+
 - [docs/Kasten_K10_VM_Recovery_Utility_PRD_v1.1_1.md](docs/Kasten_K10_VM_Recovery_Utility_PRD_v1.1_1.md) - Full PRD with implementation details
 
 ## Recent Improvements
@@ -118,3 +158,7 @@ Copyright 2025
 ## Support
 
 For issues, questions, or contributions, please contact the platform engineering team.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
