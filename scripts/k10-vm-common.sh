@@ -41,7 +41,7 @@ check_vm_freeze_annotation() {
 
 # Validate OpenShift Virtualization is installed
 check_kubevirt_installed() {
-  if ! kubectl get crd virtualmachines.kubevirt.io &>/dev/null; then
+  if ! kubectl_retry 3 get crd virtualmachines.kubevirt.io &>/dev/null; then
     log_error "OpenShift Virtualization not installed (VirtualMachine CRD not found)"
     return 1
   fi
@@ -51,7 +51,7 @@ check_kubevirt_installed() {
 
 # Check CDI is installed
 check_cdi_installed() {
-  if ! kubectl get crd datavolumes.cdi.kubevirt.io &>/dev/null; then
+  if ! kubectl_retry 3 get crd datavolumes.cdi.kubevirt.io &>/dev/null; then
     log_error "CDI (Containerized Data Importer) not installed (DataVolume CRD not found)"
     return 1
   fi
@@ -146,7 +146,7 @@ get_k10_namespace() {
   local preferred=${1:-${K10_NAMESPACE:-}}
   if [[ -n "$preferred" ]]; then echo "$preferred"; return 0; fi
   local k10_ns_list count
-  k10_ns_list=$(kubectl get namespace -o json | jq -r '.items[] | select(.metadata.name | test("^(kasten-io|k10)(-|$)|kasten|k10")) | .metadata.name')
+  k10_ns_list=$(kubectl_retry 3 get namespace -o json | jq -r '.items[] | select(.metadata.name | test("^(kasten-io|k10)(-|$)|kasten|k10")) | .metadata.name')
   count=$(echo "$k10_ns_list" | grep -c . || true)
   if [[ $count -eq 1 ]]; then echo "$k10_ns_list" | head -1; return 0; fi
   if [[ $count -gt 1 ]]; then log_error "Multiple K10 namespaces found; set K10_NAMESPACE explicitly. Candidates: $(echo "$k10_ns_list" | tr '\n' ' ')"; return 1; fi
@@ -156,7 +156,7 @@ get_k10_namespace() {
 # Check if K10 is installed
 # Check cluster connectivity
 check_cluster_connectivity() {
-  if ! kubectl get nodes &>/dev/null; then
+  if ! kubectl_retry 3 get nodes &>/dev/null; then
     log_error "Cannot connect to Kubernetes cluster. Check kubeconfig and permissions."
     return 1
   fi
@@ -166,7 +166,7 @@ check_cluster_connectivity() {
 check_k10_installed() {
   local k10_ns
   k10_ns=$(get_k10_namespace "${1:-}") || return 1
-  if kubectl get crd restorepointcontents.apps.kio.kasten.io &>/dev/null; then
+  if kubectl_retry 3 get crd restorepointcontents.apps.kio.kasten.io &>/dev/null; then
     log_success "Kasten K10 is installed (namespace: ${k10_ns})"; return 0
   fi
   log_error "Kasten K10 CRDs not found"; return 1
@@ -176,9 +176,9 @@ check_k10_installed() {
 get_restore_point_details() {
   local restore_point=$1 namespace=${2:-""}
   if [[ -n "$namespace" ]]; then
-    kubectl get restorepointcontent "${restore_point}" -n "${namespace}" -o json 2>/dev/null || echo "{}"
+    kubectl_retry 3 get restorepointcontent "${restore_point}" -n "${namespace}" -o json 2>/dev/null || echo "{}"
   else
-    kubectl get restorepointcontent "${restore_point}" -A -o json 2>/dev/null | jq '.items[0] // {}' || echo "{}"
+    kubectl_retry 3 get restorepointcontent "${restore_point}" -A -o json 2>/dev/null | jq '.items[0] // {}' || echo "{}"
   fi
 }
 get_vm_from_restore_point() {
@@ -223,13 +223,13 @@ wait_for_resource() {
   local resource_type=$1 resource_name=$2 namespace=$3 condition=${4:-""} timeout=${5:-300}
   log_info "Waiting for ${resource_type}/${resource_name} in namespace ${namespace}..."
   if [[ -n "$condition" ]]; then
-    if kubectl wait --for="${condition}" "${resource_type}/${resource_name}" -n "${namespace}" --timeout="${timeout}s" 2>/dev/null; then
+    if kubectl_retry 3 wait --for="${condition}" "${resource_type}/${resource_name}" -n "${namespace}" --timeout="${timeout}s" 2>/dev/null; then
       log_success "${resource_type}/${resource_name} is ready"; return 0
     fi
   else
     local elapsed=0
     while [[ $elapsed -lt $timeout ]]; do
-      if kubectl get "${resource_type}" "${resource_name}" -n "${namespace}" &>/dev/null; then log_success "${resource_type}/${resource_name} exists"; return 0; fi
+      if kubectl_retry 3 get "${resource_type}" "${resource_name}" -n "${namespace}" &>/dev/null; then log_success "${resource_type}/${resource_name} exists"; return 0; fi
       sleep 5; ((elapsed+=5))
     done
   fi
@@ -238,7 +238,7 @@ wait_for_resource() {
 
 get_resource_status() {
   local resource_type=$1 resource_name=$2 namespace=$3
-  kubectl get "${resource_type}" "${resource_name}" -n "${namespace}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown"
+  kubectl_retry 3 get "${resource_type}" "${resource_name}" -n "${namespace}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown"
 }
 
 print_separator() { echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; }
@@ -258,5 +258,28 @@ export -f command_exists validate_prerequisites validate_vm_restore_prerequisite
 export -f generate_timestamp sanitize_k8s_name parse_size
 export -f wait_for_resource get_resource_status
 export -f print_separator print_header
+
+# Retry wrapper for kubectl to handle transient API/connection errors
+kubectl_retry() {
+  local attempts=${1:-3}; shift
+  local sleep_secs=${KUBECTL_RETRY_SLEEP:-2}
+  local i rc
+
+  for ((i=1; i<=attempts; i++)); do
+    set +e
+    kubectl "$@"
+    rc=$?
+    set -e
+    if [[ $rc -eq 0 ]]; then return 0; fi
+    if [[ $i -lt attempts ]]; then
+      log_warning "kubectl retry ${i}/${attempts} failed (exit ${rc}), retrying in ${sleep_secs}s..."
+      sleep "${sleep_secs}"
+    fi
+  done
+
+  log_error "kubectl failed after ${attempts} attempt(s): kubectl $*"
+  return $rc
+}
+export -f kubectl_retry
 
 log_info "Common functions loaded successfully"

@@ -108,7 +108,7 @@ parse_args() {
 get_datavolumes_from_rpc() {
   local rpc_name=$1
 
-  kubectl get restorepointcontent "$rpc_name" -A -o json 2>/dev/null | \
+  kubectl_retry 3 get restorepointcontent "$rpc_name" -A -o json 2>/dev/null | \
     jq -r '.status.restorePointContentDetails.artifacts[]? |
            select(.resource.group == "cdi.kubevirt.io" and .resource.resource == "datavolumes") |
            .resource.name' || echo ""
@@ -118,7 +118,7 @@ get_datavolumes_from_rpc() {
 get_vm_details_from_rpc() {
   local rpc_name=$1
 
-  kubectl get restorepointcontent "$rpc_name" -A -o json 2>/dev/null || echo '{}'
+  kubectl_retry 3 get restorepointcontent "$rpc_name" -A -o json 2>/dev/null || echo '{}'
 }
 
 # Generate DataVolume transforms
@@ -357,7 +357,7 @@ validate_transform_inputs() {
   log_info "Validating transform generation inputs..."
 
   # Check if restore point exists
-  if ! kubectl get restorepointcontent "$RESTORE_POINT" -A &>/dev/null; then
+  if ! kubectl_retry 3 get restorepointcontent "$RESTORE_POINT" -A &>/dev/null; then
     log_error "Restore point not found: ${RESTORE_POINT}"
     return 1
   fi

@@ -118,7 +118,7 @@ get_restore_point_contents() {
     filter_args=(-A)
   fi
 
-  kubectl get restorepointcontents.apps.kio.kasten.io "${filter_args[@]}" -o json 2>/dev/null || echo '{"items":[]}'
+  kubectl_retry 3 get restorepointcontents.apps.kio.kasten.io "${filter_args[@]}" -o json 2>/dev/null || echo '{"items":[]}'
 }
 
 # Check if restore point is for a VM
@@ -247,7 +247,7 @@ get_restore_methods() {
 
   echo "$rpc_json" | jq -c '
     [
-      (if ([.status.restorePointContentDetails.artifacts[]? | select(.volumeSnapshot != null)] | length) > 0 then "Snapshot" else empty end),
+      (if ([.status.restorePointContentDetails.artifacts[]? | select(.resource.group == "cdi.kubevirt.io" and .resource.resource == "datavolumes" and .volumeSnapshot != null)] | length) > 0 then "Snapshot" else empty end),
       (if (.status.restorePointContentDetails.exportData.enabled // false) then "Export" else empty end)
     ]
   ' 2>/dev/null || echo '[]'
@@ -363,7 +363,7 @@ discover_vms() {
   if [[ "$VM_ONLY" == true ]]; then
     # Fetch all active VMs once to avoid N+1 kubectl calls
     local active_vms_json
-    active_vms_json=$(kubectl get vm -A -o json 2>/dev/null || echo '{"items":[]}')
+    active_vms_json=$(kubectl_retry 3 get vm -A -o json 2>/dev/null || echo '{"items":[]}')
     # Build a set of "namespace/name" for quick lookup
     declare -A ACTIVE_VMS_SET
     while IFS= read -r vm; do

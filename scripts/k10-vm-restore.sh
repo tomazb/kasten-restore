@@ -198,6 +198,22 @@ compute_restore_names() {
   RESTORE_ACTION_NAME=$(sanitize_k8s_name "restore-${VM_NAME}-${rpc_safe}")
 }
 
+# Extract TransformSet metadata.name from a YAML file without requiring kubectl/yq
+extract_transform_name() {
+  local file=$1
+  local name
+  name=$(awk '
+    /^metadata:/ { in_meta=1; next }
+    in_meta && /^[^[:space:]]/ { in_meta=0 }
+    in_meta && /^[[:space:]]*name:[[:space:]]*/ { sub(/^[[:space:]]*name:[[:space:]]*/, "", $0); print; exit }
+  ' "$file")
+  if [[ -z "$name" ]]; then
+    log_error "Unable to determine TransformSet name from ${file}"
+    return 1
+  fi
+  echo "$name"
+}
+
 # Prompt helper
 confirm_action() {
   local prompt_msg=$1
@@ -225,9 +241,9 @@ force_cleanup() {
 
   # Delete TransformSet only when we're managing transforms (no custom file provided)
   if [[ -z "$TRANSFORM_FILE" ]]; then
-    kubectl delete transformset "${TRANSFORM_NAME}" -n "${k10_ns}" --ignore-not-found || true
+    kubectl_retry 3 delete transformset "${TRANSFORM_NAME}" -n "${k10_ns}" --ignore-not-found || true
   fi
-  kubectl delete restoreaction "${RESTORE_ACTION_NAME}" -n "${TARGET_NAMESPACE}" --ignore-not-found || true
+  kubectl_retry 3 delete restoreaction "${RESTORE_ACTION_NAME}" -n "${TARGET_NAMESPACE}" --ignore-not-found || true
 
   return 0
 }
@@ -235,7 +251,7 @@ force_cleanup() {
 # Get restore point details
 get_rpc_details() {
   local rpc_name=$1
-  kubectl get restorepointcontent "$rpc_name" -A -o json 2>/dev/null || echo '{}'
+  kubectl_retry 3 get restorepointcontent "$rpc_name" -A -o json 2>/dev/null || echo '{}'
 }
 
 # Initialize restore context from restore point
@@ -434,7 +450,7 @@ apply_transforms() {
 
   log_info "Applying transforms..."
 
-  if kubectl apply -f "$transform_file"; then
+  if kubectl_retry 3 apply -f "$transform_file"; then
     log_success "Transforms applied"
     return 0
   else
@@ -457,10 +473,10 @@ create_restore_action() {
   k10_namespace=$(get_k10_namespace)
 
   # If RestoreAction already exists, skip creation (idempotent behavior)
-  if kubectl get restoreaction "${RESTORE_ACTION_NAME}" -n "${TARGET_NAMESPACE}" &>/dev/null; then
+  if kubectl_retry 3 get restoreaction "${RESTORE_ACTION_NAME}" -n "${TARGET_NAMESPACE}" &>/dev/null; then
     if [[ "$FORCE" == true ]]; then
       log_info "RestoreAction exists and --force set; deleting before re-create"
-      kubectl delete restoreaction "${RESTORE_ACTION_NAME}" -n "${TARGET_NAMESPACE}" --ignore-not-found || true
+      kubectl_retry 3 delete restoreaction "${RESTORE_ACTION_NAME}" -n "${TARGET_NAMESPACE}" --ignore-not-found || true
     else
       log_info "RestoreAction already exists: ${RESTORE_ACTION_NAME}. Skipping creation."
       return 0
@@ -469,7 +485,7 @@ create_restore_action() {
 
   log_info "Creating RestoreAction: ${RESTORE_ACTION_NAME}"
 
-  if cat <<EOF | kubectl apply -f -
+  if cat <<EOF | kubectl_retry 3 apply -f -
 apiVersion: actions.kio.kasten.io/v1alpha1
 kind: RestoreAction
 metadata:
@@ -511,8 +527,9 @@ monitor_restore() {
   local state=""
 
   while [[ $elapsed -lt $timeout ]]; do
-    state=$(kubectl get restoreaction "$restore_action" -n "$namespace" \
-      -o jsonpath='{.status.state}' 2>/dev/null || echo "Unknown")
+    state=$(kubectl_retry 3 get restoreaction "$restore_action" -n "$namespace" \
+      -o jsonpath='{.status.state}' 2>/dev/null || true)
+    state=${state:-Unknown}
 
     case "$state" in
       "Complete")
@@ -581,7 +598,7 @@ verify_restore() {
   print_header "RESTORE VERIFICATION"
 
   # Check VM exists
-  if kubectl get vm "$VM_NAME" -n "$TARGET_NAMESPACE" &>/dev/null; then
+  if kubectl_retry 2 get vm "$VM_NAME" -n "$TARGET_NAMESPACE" &>/dev/null; then
     log_success "VM exists: ${VM_NAME}"
   else
     log_error "VM not found: ${VM_NAME}"
@@ -690,6 +707,11 @@ execute_restore() {
     fi
   fi
 
+  # Optional forced cleanup right before applying new artifacts
+  if [[ "$FORCE" == true ]]; then
+    force_cleanup || true
+  fi
+
   # Apply transforms
   if ! apply_transforms "$transform_file"; then
     return 1
@@ -697,7 +719,9 @@ execute_restore() {
 
   # Extract transform name
   local transform_name
-  transform_name=$(grep "^  name:" "$transform_file" | head -1 | awk '{print $2}')
+  if ! transform_name=$(extract_transform_name "$transform_file"); then
+    return 1
+  fi
 
   # Create RestoreAction
   if ! create_restore_action "$RESTORE_POINT" "$transform_name"; then
@@ -759,16 +783,13 @@ main() {
   fi
 
   # If VM already exists and clone requested, resolve a clone name early (affects plan and transforms)
-  if kubectl get vm "$VM_NAME" -n "$TARGET_NAMESPACE" &>/dev/null && [[ "$CLONE_ON_CONFLICT" == true ]]; then
+  if kubectl_retry 2 get vm "$VM_NAME" -n "$TARGET_NAMESPACE" &>/dev/null && [[ "$CLONE_ON_CONFLICT" == true ]]; then
     VM_NAME=$(resolve_clone_name "$VM_NAME" "$TARGET_NAMESPACE")
     log_info "Using clone VM name: ${VM_NAME}"
   fi
 
-  # Compute names and optionally perform force cleanup of previous artifacts
+  # Compute names
   compute_restore_names
-  if [[ "$FORCE" == true ]]; then
-    force_cleanup || true
-  fi
 
   # Validate restore
   if [[ "$VALIDATE" == true ]] || [[ "$DRY_RUN" == true ]]; then
