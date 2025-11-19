@@ -27,6 +27,8 @@ AUTO_CONFIRM=false
 RESTORE_ACTION_NAME=""
 CLONE_ON_CONFLICT=false
 FORCE=false
+TIMEOUT_RESTORE=${TIMEOUT_RESTORE:-600}
+TIMEOUT_READY=${TIMEOUT_READY:-300}
 
 # Usage function
 usage() {
@@ -172,7 +174,10 @@ resolve_clone_name() {
   fi
 
   local i
-  for i in $(seq 2 99); do
+  for i in $(seq 2 999); do
+    if [[ $i -eq 900 || $i -eq 950 || $i -eq 990 ]]; then
+      >&2 echo "Warning: High clone suffix ($i) reached while resolving VM name for '${base_name}' in namespace '${namespace}'."
+    fi
     candidate=$(sanitize_k8s_name "${base_name}-clone-${i}")
     if ! kubectl get vm "${candidate}" -n "${namespace}" &>/dev/null; then
       echo "${candidate}"
@@ -393,6 +398,7 @@ create_restore_transforms() {
   fi
   transform_name="$TRANSFORM_NAME"
   transform_output="/tmp/${transform_name}.yaml"
+  GENERATED_TRANSFORM_FILE="$transform_output"
 
   log_info "Generating transforms (name: ${transform_name})..."
 
@@ -491,7 +497,7 @@ EOF
 monitor_restore() {
   local restore_action=$1
   local namespace=$2
-  local timeout=600  # 10 minutes
+  local timeout=${TIMEOUT_RESTORE}  # 10 minutes
 
   log_info "Monitoring restore progress (timeout: ${timeout}s)..."
 
@@ -535,7 +541,7 @@ post_restore_actions() {
   # Wait for VM to be created
   # Note: Extended timeout (300s) to account for DataVolume provisioning and CDI import operations
   # which can take longer than standard resource creation
-  if wait_for_resource "vm" "$VM_NAME" "$TARGET_NAMESPACE" "" 300; then
+  if wait_for_resource "vm" "$VM_NAME" "$TARGET_NAMESPACE" "" "${TIMEOUT_READY}"; then
     log_success "VirtualMachine created: ${VM_NAME}"
   else
     log_warning "VirtualMachine not created within timeout"
@@ -554,7 +560,7 @@ post_restore_actions() {
     # Note: Extended timeout (300s) to accommodate VM boot time, which includes:
     # - PVC binding, - Volume attachment, - Guest OS initialization
     sleep 10
-    if wait_for_resource "vmi" "$VM_NAME" "$TARGET_NAMESPACE" "" 300; then
+    if wait_for_resource "vmi" "$VM_NAME" "$TARGET_NAMESPACE" "" "${TIMEOUT_READY}"; then
       log_success "VirtualMachineInstance is running"
     else
       log_warning "VirtualMachineInstance not running yet (may take time to boot)"
@@ -708,7 +714,15 @@ execute_restore() {
   return 0
 }
 
-# Main function
+
+cleanup() {
+  if [[ -n "${GENERATED_TRANSFORM_FILE:-}" ]] && [[ -f "$GENERATED_TRANSFORM_FILE" ]]; then
+    # Only log if we are not in quiet mode (optional, staying simple)
+    rm -f "$GENERATED_TRANSFORM_FILE"
+  fi
+}
+trap cleanup EXIT
+
 main() {
   parse_args "$@"
 

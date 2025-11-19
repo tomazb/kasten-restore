@@ -154,6 +154,15 @@ get_k10_namespace() {
 }
 
 # Check if K10 is installed
+# Check cluster connectivity
+check_cluster_connectivity() {
+  if ! kubectl get nodes &>/dev/null; then
+    log_error "Cannot connect to Kubernetes cluster. Check kubeconfig and permissions."
+    return 1
+  fi
+  return 0
+}
+
 check_k10_installed() {
   local k10_ns
   k10_ns=$(get_k10_namespace "${1:-}") || return 1
@@ -182,19 +191,21 @@ get_vm_from_restore_point() {
 command_exists() { command -v "$1" &>/dev/null; }
 validate_prerequisites() {
   local missing_tools=()
+  command_exists md5sum || missing_tools+=("md5sum")
   command_exists kubectl || missing_tools+=("kubectl")
   command_exists jq || missing_tools+=("jq")
   if [[ ${#missing_tools[@]} -gt 0 ]]; then
     log_error "Missing required tools: ${missing_tools[*]}"
     log_error "Please install the required tools and try again"; return 1
   fi
-  log_success "All required tools are installed (kubectl, jq)"; return 0
+  log_success "All required tools are installed (md5sum, kubectl, jq)"; return 0
 }
 
 validate_vm_restore_prerequisites() {
   local errors=0
   log_info "Validating prerequisites..."
   validate_prerequisites || ((errors++))
+  check_cluster_connectivity || ((errors++))
   check_k10_installed || ((errors++))
   check_kubevirt_installed || ((errors++))
   check_cdi_installed || ((errors++))
@@ -241,7 +252,7 @@ export -f get_pvc_for_datavolume wait_for_vm_ready check_vm_guest_agent
 export -f get_vm_state get_vm_resources
 export -f namespace_exists ensure_namespace
 export -f check_storage_class check_snapshot_class validate_namespace_capacity
-export -f get_k10_namespace check_k10_installed
+export -f get_k10_namespace check_k10_installed check_cluster_connectivity
 export -f get_restore_point_details get_vm_from_restore_point
 export -f command_exists validate_prerequisites validate_vm_restore_prerequisites
 export -f generate_timestamp sanitize_k8s_name parse_size

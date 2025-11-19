@@ -128,6 +128,7 @@ generate_datavolume_transforms() {
   - subject:
       resource: datavolumes
       group: cdi.kubevirt.io
+      # Note: ".*" is safe here as RestoreAction scopes transforms to the specific restored artifacts
       resourceNameRegex: ".*"
     json:
       # Remove source to prevent CDI from attempting import
@@ -155,6 +156,7 @@ generate_pvc_transforms() {
   # PersistentVolumeClaim: Add CDI bound annotations
   - subject:
       resource: persistentvolumeclaims
+      # Note: ".*" is safe here as RestoreAction scopes transforms to the specific restored artifacts
       resourceNameRegex: ".*"
     json:
       # Add CDI bound annotation
@@ -191,6 +193,7 @@ generate_vm_transforms() {
   - subject:
       resource: virtualmachines
       group: kubevirt.io
+      # Note: ".*" is safe here as RestoreAction scopes transforms to the specific restored artifacts
       resourceNameRegex: ".*"
     json:
       # Clear dataVolumeTemplates to use existing DataVolumes
@@ -235,6 +238,7 @@ generate_namespace_transform() {
     cat <<EOF
   # Namespace: Update target namespace
   - subject:
+      # Note: ".*" is safe here as RestoreAction scopes transforms to the specific restored artifacts
       resourceNameRegex: ".*"
     json:
       - op: replace
