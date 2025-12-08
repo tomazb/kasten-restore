@@ -1,6 +1,6 @@
-# Kasten K10 VM Recovery Utility Scripts (MVP)
+# Kasten K10 VM Recovery Utility Scripts
 
-**Version:** 1.0.2
+**Version:** 1.1.0
 **Target Environment:** Kasten K10 v8.x on OpenShift 4.18 with OpenShift Virtualization
 
 ## Overview
@@ -142,7 +142,16 @@ For detailed documentation, see:
 
 ## Recent Improvements
 
-### Code Quality Enhancements (v1.0.1)
+### v1.1.0 Enhancements
+
+- **Centralized Version**: Single version number shared across all scripts via `K10_VM_UTILS_VERSION`
+- **Security Fixes**: Temp files now use secure permissions (600); kubectl arguments masked in error logs
+- **Configurable Timeouts**: All timeouts and retry settings controllable via environment variables
+- **Verbosity Controls**: New `--verbose`, `--quiet`, and `--version` flags on all scripts
+- **Performance**: `resolve_clone_name` optimized from N kubectl calls to 1 call
+- **Code Quality**: Duplicate functions consolidated; expanded smoke tests
+
+### v1.0.1 Enhancements
 
 - **Enhanced MAC Address Handling**: Transform generation now correctly handles all network interfaces, not just the first one, preventing MAC conflicts when VMs have multiple NICs
 - **Robust Annotation Parsing**: Switched from `kubectl jsonpath` to `jq` for annotation parsing to handle special characters reliably

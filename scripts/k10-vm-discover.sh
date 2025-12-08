@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Kasten K10 VM Recovery Utility - VM Discovery Script
-# Version: 1.0.0
 # Description: Find and list VM restore points with disk details
+# Version is centralized in k10-vm-common.sh
 
 set -euo pipefail
 
@@ -35,6 +35,9 @@ OPTIONS:
   --vm-only                Filter out non-VM workloads (default: true)
   --deleted-only           Show only deleted VMs with restore points
   --output <format>        Output format: text or json (default: text)
+  --verbose                Enable verbose output
+  --quiet                  Suppress non-essential output
+  --version                Show version and exit
   --help                   Show this help message
 
 EXAMPLES:
@@ -89,6 +92,18 @@ parse_args() {
       --output)
         OUTPUT_FORMAT="$2"
         shift 2
+        ;;
+      --verbose)
+        VERBOSE=true
+        shift
+        ;;
+      --quiet)
+        QUIET=true
+        shift
+        ;;
+      --version)
+        echo "k10-vm-discover.sh version $(get_version)"
+        exit 0
         ;;
       --help)
         usage

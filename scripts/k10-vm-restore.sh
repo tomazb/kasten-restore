@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Kasten K10 VM Recovery Utility - VM Restore Script
-# Version: 1.0.0
 # Description: Execute VM restore operations with CDI awareness
+# Version is centralized in k10-vm-common.sh
 
 set -euo pipefail
 
@@ -27,8 +27,7 @@ AUTO_CONFIRM=false
 RESTORE_ACTION_NAME=""
 CLONE_ON_CONFLICT=false
 FORCE=false
-TIMEOUT_RESTORE=${TIMEOUT_RESTORE:-600}
-TIMEOUT_READY=${TIMEOUT_READY:-300}
+# Timeouts are set in k10-vm-common.sh but can be overridden
 
 # Usage function
 usage() {
@@ -53,6 +52,9 @@ OPTIONS:
   --transform-file <file>    Use custom transform file
   --force                    Delete previous K10 artifacts (TransformSet/RestoreAction) and re-run
   --yes                      Auto-confirm without prompting
+  --verbose                  Enable verbose output
+  --quiet                    Suppress non-essential output
+  --version                  Show version and exit
   --help                     Show this help message
 
 EXAMPLES:
@@ -144,6 +146,18 @@ parse_args() {
         AUTO_CONFIRM=true
         shift
         ;;
+      --verbose)
+        VERBOSE=true
+        shift
+        ;;
+      --quiet)
+        QUIET=true
+        shift
+        ;;
+      --version)
+        echo "k10-vm-restore.sh version $(get_version)"
+        exit 0
+        ;;
       --help)
         usage
         ;;
@@ -162,24 +176,34 @@ parse_args() {
 }
 
 # Resolve a unique VM name by appending a clone suffix when needed
+# Performance optimized: fetches all VMs in namespace once instead of N kubectl calls
 resolve_clone_name() {
   local base_name=$1
   local namespace=$2
   local candidate
 
+  log_debug "Resolving clone name for '${base_name}' in namespace '${namespace}'"
+
+  # Fetch all existing VM names in the namespace once (performance optimization)
+  local existing_vms
+  existing_vms=$(kubectl get vm -n "${namespace}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+  log_debug "Existing VMs in namespace: ${existing_vms}"
+
+  # Check base clone name first
   candidate=$(sanitize_k8s_name "${base_name}-clone")
-  if ! kubectl get vm "${candidate}" -n "${namespace}" &>/dev/null; then
+  if [[ ! " ${existing_vms} " =~ " ${candidate} " ]]; then
     echo "${candidate}"
     return 0
   fi
 
+  # Try numbered suffixes
   local i
   for i in $(seq 2 999); do
     if [[ $i -eq 900 || $i -eq 950 || $i -eq 990 ]]; then
-      >&2 echo "Warning: High clone suffix ($i) reached while resolving VM name for '${base_name}' in namespace '${namespace}'."
+      log_warning "High clone suffix ($i) reached while resolving VM name for '${base_name}'"
     fi
     candidate=$(sanitize_k8s_name "${base_name}-clone-${i}")
-    if ! kubectl get vm "${candidate}" -n "${namespace}" &>/dev/null; then
+    if [[ ! " ${existing_vms} " =~ " ${candidate} " ]]; then
       echo "${candidate}"
       return 0
     fi
@@ -187,6 +211,7 @@ resolve_clone_name() {
 
   # Fallback to time-suffixed (less deterministic)
   candidate=$(sanitize_k8s_name "${base_name}-clone-$(date +%s)")
+  log_debug "Using time-based fallback name: ${candidate}"
   echo "${candidate}"
 }
 
@@ -291,21 +316,8 @@ initialize_restore_context_from_rpc() {
   return 0
 }
 
-# Get DataVolumes from restore point
-get_datavolumes_from_rpc() {
-  local rpc_json=$1
-  echo "$rpc_json" | jq -c '
-    [
-      .status.restorePointContentDetails.artifacts[]? |
-      select(.resource.group == "cdi.kubevirt.io" and .resource.resource == "datavolumes") |
-      {
-        name: .resource.name,
-        size: (.artifact.spec.pvc.resources.requests.storage // "Unknown"),
-        hasSnapshot: (.volumeSnapshot != null)
-      }
-    ]
-  ' 2>/dev/null || echo '[]'
-}
+# NOTE: get_datavolumes_from_rpc is now defined in k10-vm-common.sh
+# This avoids code duplication and ensures consistent behavior
 
 # Validate restore prerequisites
 validate_restore() {
@@ -419,8 +431,10 @@ create_restore_transforms() {
     compute_restore_names
   fi
   transform_name="$TRANSFORM_NAME"
-  transform_output="/tmp/${transform_name}.yaml"
+  # Use secure temp file creation (chmod 600)
+  transform_output=$(create_secure_temp ".yaml")
   GENERATED_TRANSFORM_FILE="$transform_output"
+  log_debug "Using secure temp file: ${transform_output}"
 
   log_info "Generating transforms (name: ${transform_name})..."
 

@@ -1,22 +1,52 @@
 #!/bin/bash
 
 # Kasten K10 VM Recovery Utility - Common Functions
-# Version: 1.0.1
 # Description: Shared utility functions for VM discovery, restore, and transform scripts
 
 set -euo pipefail
 
-# Color codes for output
+# =============================================================================
+# VERSION - Single source of truth for all scripts
+# =============================================================================
+readonly K10_VM_UTILS_VERSION="1.1.0"
+
+# =============================================================================
+# CONFIGURABLE DEFAULTS - Override via environment variables
+# =============================================================================
+: "${TIMEOUT_RESTORE:=600}"        # Timeout for RestoreAction completion (seconds)
+: "${TIMEOUT_READY:=300}"          # Timeout for VM/VMI readiness (seconds)
+: "${KUBECTL_RETRY_ATTEMPTS:=3}"   # Number of kubectl retry attempts
+: "${KUBECTL_RETRY_SLEEP:=2}"      # Sleep between kubectl retries (seconds)
+: "${DEBUG:=false}"                # Enable debug logging
+: "${VERBOSE:=false}"              # Enable verbose output
+: "${QUIET:=false}"                # Suppress non-essential output
+
+# =============================================================================
+# COLOR CODES
+# =============================================================================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Logging functions
-log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
-log_success() { echo -e "${GREEN}[✓]${NC} $*"; }
-log_warning() { echo -e "${YELLOW}[WARNING]${NC} $*"; }
+# =============================================================================
+# LOGGING FUNCTIONS - Verbosity aware
+# =============================================================================
+log_debug() {
+  [[ "$DEBUG" == "true" ]] && echo -e "${CYAN}[DEBUG]${NC} $*" >&2 || true
+}
+log_info() {
+  [[ "$QUIET" != "true" ]] && echo -e "${BLUE}[INFO]${NC} $*" || true
+}
+log_verbose() {
+  [[ "$VERBOSE" == "true" ]] && echo -e "${BLUE}[INFO]${NC} $*" || true
+}
+log_success() {
+  [[ "$QUIET" != "true" ]] && echo -e "${GREEN}[✓]${NC} $*" || true
+}
+log_warning() { echo -e "${YELLOW}[WARNING]${NC} $*" >&2; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 # Check if resource is a VM
@@ -245,7 +275,7 @@ print_separator() { echo "━━━━━━━━━━━━━━━━━━
 print_header() { local title=$1; echo ""; print_separator; echo -e "${BLUE}${title}${NC}"; print_separator; echo ""; }
 
 # Export functions for use in other scripts
-export -f log_info log_success log_warning log_error
+export -f log_debug log_info log_verbose log_success log_warning log_error
 export -f is_virtual_machine get_vm_disks check_vm_freeze_annotation
 export -f check_kubevirt_installed check_cdi_installed
 export -f get_pvc_for_datavolume wait_for_vm_ready check_vm_guest_agent
@@ -259,13 +289,78 @@ export -f generate_timestamp sanitize_k8s_name parse_size
 export -f wait_for_resource get_resource_status
 export -f print_separator print_header
 
-# Retry wrapper for kubectl to handle transient API/connection errors
+# =============================================================================
+# PROGRESS SPINNER - For long-running operations
+# =============================================================================
+show_spinner() {
+  local pid=$1
+  local message=${2:-"Working"}
+  local spin='⣾⣽⣻⢿⡿⣟⣯⣷'
+  local i=0
+
+  [[ "$QUIET" == "true" ]] && return 0
+
+  while kill -0 "$pid" 2>/dev/null; do
+    printf "\r${BLUE}[%s]${NC} %s..." "${spin:$((i++ % 8)):1}" "$message"
+    sleep 0.1
+  done
+  printf "\r\033[K"  # Clear the line
+}
+export -f show_spinner
+
+# =============================================================================
+# SECURE TEMP FILE CREATION
+# =============================================================================
+create_secure_temp() {
+  local suffix=${1:-.tmp}
+  local tmpfile
+  tmpfile=$(mktemp --suffix="$suffix")
+  chmod 600 "$tmpfile"
+  echo "$tmpfile"
+}
+export -f create_secure_temp
+
+# =============================================================================
+# SAFE JSON PARSING - With error handling
+# =============================================================================
+safe_jq() {
+  local filter=$1
+  local json=$2
+  local default=${3:-""}
+  local result
+
+  if ! result=$(echo "$json" | jq -r "$filter" 2>&1); then
+    log_debug "jq parse failed for filter '$filter': $result"
+    echo "$default"
+    return 1
+  fi
+
+  # Handle null/empty results
+  if [[ "$result" == "null" || -z "$result" ]]; then
+    echo "$default"
+    return 0
+  fi
+
+  echo "$result"
+}
+export -f safe_jq
+
+# =============================================================================
+# RETRY WRAPPER FOR KUBECTL
+# Handles transient API/connection errors with configurable retries
+# Security: Does not log command arguments to avoid exposing sensitive data
+# =============================================================================
 kubectl_retry() {
-  local attempts=${1:-3}; shift
-  local sleep_secs=${KUBECTL_RETRY_SLEEP:-2}
+  local attempts=${1:-$KUBECTL_RETRY_ATTEMPTS}; shift
+  local sleep_secs=${KUBECTL_RETRY_SLEEP}
   local i rc
+  local cmd_summary
+
+  # Create a sanitized summary of the command (first 2-3 args only, no sensitive data)
+  cmd_summary="${1:-} ${2:-} ${3:-}..."
 
   for ((i=1; i<=attempts; i++)); do
+    log_debug "kubectl attempt ${i}/${attempts}: $cmd_summary"
     set +e
     kubectl "$@"
     rc=$?
@@ -277,9 +372,40 @@ kubectl_retry() {
     fi
   done
 
-  log_error "kubectl failed after ${attempts} attempt(s): kubectl $*"
+  # Security: Only log the command type, not full arguments which may contain secrets
+  log_error "kubectl failed after ${attempts} attempt(s): ${cmd_summary} (exit code: ${rc})"
   return $rc
 }
 export -f kubectl_retry
 
-log_info "Common functions loaded successfully"
+# =============================================================================
+# GET DATAVOLUMES FROM RESTORE POINT - Centralized function
+# =============================================================================
+get_datavolumes_from_rpc() {
+  local rpc_json=$1
+
+  echo "$rpc_json" | jq -c '
+    [
+      .status.restorePointContentDetails.artifacts[]? |
+      select(.resource.group == "cdi.kubevirt.io" and .resource.resource == "datavolumes") |
+      {
+        name: .resource.name,
+        size: (.artifact.spec.pvc.resources.requests.storage // "Unknown"),
+        hasSnapshot: (.volumeSnapshot != null)
+      }
+    ]
+  ' 2>/dev/null || echo '[]'
+}
+export -f get_datavolumes_from_rpc
+
+# =============================================================================
+# VERSION HELPER
+# =============================================================================
+get_version() {
+  echo "$K10_VM_UTILS_VERSION"
+}
+export -f get_version
+
+log_debug "Common functions loaded (version: ${K10_VM_UTILS_VERSION})"
+[[ "$QUIET" != "true" ]] && log_info "Common functions loaded successfully"
+

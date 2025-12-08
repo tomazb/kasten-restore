@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Kasten K10 VM Recovery Utility - Transform Generation Script
-# Version: 1.0.0
 # Description: Generate VM-specific transforms for DataVolumes and PVCs
+# Version is centralized in k10-vm-common.sh
 
 set -euo pipefail
 
@@ -34,6 +34,9 @@ OPTIONS:
   --new-mac                Generate new MAC addresses
   --vm-name <name>         Override VM name
   --transform-name <name>  Transform set name (default: auto-generated)
+  --verbose                Enable verbose output
+  --quiet                  Suppress non-essential output
+  --version                Show version and exit
   --help                   Show this help message
 
 EXAMPLES:
@@ -87,6 +90,18 @@ parse_args() {
         TRANSFORM_NAME="$2"
         shift 2
         ;;
+      --verbose)
+        VERBOSE=true
+        shift
+        ;;
+      --quiet)
+        QUIET=true
+        shift
+        ;;
+      --version)
+        echo "k10-vm-transform.sh version $(get_version)"
+        exit 0
+        ;;
       --help)
         usage
         ;;
@@ -104,9 +119,12 @@ parse_args() {
   fi
 }
 
-# Get DataVolume names from restore point
-get_datavolumes_from_rpc() {
+# Get DataVolume names from restore point (by RPC name)
+# Note: This variant fetches RPC by name and extracts DV names as strings
+# The common.sh version takes JSON and returns structured data
+get_datavolume_names_from_rpc() {
   local rpc_name=$1
+  log_debug "Fetching DataVolume names from RPC: ${rpc_name}"
 
   kubectl_retry 3 get restorepointcontent "$rpc_name" -A -o json 2>/dev/null | \
     jq -r '.status.restorePointContentDetails.artifacts[]? |
